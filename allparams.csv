@@ -1,0 +1,59 @@
+Characteristic_in_Denominator,Proportion,UR low,UR high,,
+Retreatment_in_All,0.17,0.1,0.22,,copied from patient characteristics en block
+RIF-R_in_New,0.028,0.02,0.036,,
+RIF-R_in_Retreatment,0.13,0.05,0.2,,
+PZA-R_in_RIF-S,0.051299508,0.005,0.065,,
+PZA-R_in_RIF-R,0.29,0.2,0.4,,
+MOXI-R-any_in_RIF-S,0.035656895,0.02,0.08,,
+MOXI-R-any_in_RIF-R,0.152230277,0.12,0.19,,
+MOXI-R-highlevel_in_RIF-S,0.002636736,0.001,0.005,,
+MOXI-R-highlevel_in_RIF-R,0.023624699,0.014,0.032,,
+INH-R_in_NewRIF-S,0.085,0.07,0.1,,
+INH-R_in_RetreatmentRIF-S,0.152,0.13,0.18,,
+INH-R_in_RIF-R,1,0.9,1,,
+BDQ-R_in_All,0,0,0.01,,
+PA-R_in_All,0,0,0.01,,
+Tbdxtime,12,8,18,,TB epi and clinical practice en block
+Tbdxtime_recurrence,6,4,9,,
+Unavoidableloss,0.1,0.05,0.2,,
+DSTdelay,0,0,0.5,,
+DSTloss,0,0,0.1,,
+Regimendelay,0.25,0.1,3,,
+Regimenloss,0.05,0,0.2,,
+Monthlyloss,0.01,0.008,0.02,,
+Rate_of_spread,0.075,0.027777778,0.166666667,,
+Monthlymortality_TB,0.016666667,0,0,,"1/5/12, avg time to death 5 yrs among those who die (poisson, makes half dead at 3.5 years)"
+Monthlymortality_background,0.002083333,0,0,,1/40/12
+Monthlymortality_HIV,0.002,0.001,0.004,,
+HIV_in_all,0.03,0.02,0.04,,
+Smearpos_in_HIVpos,0.32,0.2,0.45,,
+Smearpos_in_HIVneg,0.5,0.4,0.64,,
+Sens_TB_smearpos,0.990769231,0.98,1,,
+Sens_TB_smearneg,0.63,0.54,0.71,,
+Sens_RR,0.95,0.9,0.99,,
+Sens_FQ_high,0.96,0.87,0.995,,
+Sens_FQ_low,0.75,0.59,0.86,,
+Xpert_current_new,0.25,0.15,0.4,,
+Xpert_current_rerx,0.7,0.66,0.8,,
+Recurrence_interval,11,6,18,,
+Failures_per_recurrence,0.25,0.1,1,,
+coef1,2.5289,,,,wallis
+coef2,2.5018,,,,wallis
+coef3,0.4399,,,,wallis
+pooled_INH_fraction,0.063461452,,,,"See treatment outcome assumptions, reflecting 4mo fq trials"
+HRZE_pooled_relapse,0.062789335,,,,See treatment outcome assumptions
+INH_multiplier,3,,,,See treatment outcome assumptions
+BPaM_cxconv,0.94,,,,See treatment outcome assumptions
+BPaZ_cxconv,0.89,,,,See treatment outcome assumptions
+MDR_failrelapse_FQ-S,0.108706852,0.07,0.2,,"See treatment outcome assumptions. Low bound is based on STREAM 1, (f+r)/(s+f+r)=(1+4+0+2)/(124-5-3-3-4-3). High bound assumes worse in non-research settings. "
+MDR_failrelapse_FQ-R,0.260869565,0.11,0.4,,See treatment outcome assumptions. Low bound assumes as good as FQ-S with modern drugs. High bound assumes additional resistance along with FQ-R.
+Highrecurrence,0.8,,,,See treatment outcome assumptions
+adr_r,0.005,,,,From resistance outcomes en block
+adr_bpamz,0.002,,,,
+adr_mdr,0.04,,,,
+adrfactor_other,3,,,,
+adrfactor_z,1,,,,
+adrfactor_twodrugs,10,,,,
+adrfactor_partialmoxi,0.67,,,,
+novelcoverage,1,,,,What fraction of eligible patients are considered for the novel regimen and/or novel DST
+partialmoxiOR,1.7,,,,Menizes Lancet 2018; see treamtent outcome assumptions
