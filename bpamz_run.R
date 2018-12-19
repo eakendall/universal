@@ -3,27 +3,28 @@ source("bpamz_cohort_20181218.R")
 
 date <- "20181218"
 
-cohortsize <- 5e7 # 1e7 is barely enough to capture all but the rarest combinations at least once. Really using this to get freqs.
+cohortsize <- 4e7 # 1e7 is barely enough to capture all but the rarest combinations at least once. Really using this to get freqs.
 # make the cohort
 cohort <- make.cohort(params=params, patientvars = patientvars, N=cohortsize)
 c <- as.data.frame(table(cohort),stringsAsFactors = F)
 c[rev(order(c$Freq)),]
 c[] <- lapply(c, function(x) as.numeric(x))
-
-
 distincts_with_freqs <- c[rev(order(c$Freq)),] # rather than modeling based on frequency in the population, model each patient type the same number of times and then bootstrap (if we increase the number of different types, may want to model the common types more than the rarer types)
 c <- distincts_with_freqs %>% filter(MOXI==1|partialmoxi==0) # an imposible combo as coded
 save(c, file="cohort.Rdata")
+
 load("cohort.Rdata")
 tail(c %>% filter(INH==1|RIF==0)) # Rif monos essentially don't exist in India, so checking that other combos aren't missing
 nrow(c %>% filter(Freq>0)) # number of patient types to be run, ~140 for India
 c <- c %>% filter(Freq>0)
 reps <- 1e3 # how many reps of each patient type to run? (will then sample Freq of each to recreate original cohort or subset thereof)
 # 1e3 already gives a >1GB list for 3 scenarios, so may want to filter the cohort (e.g. to RR of FQ-R only) before the next step.  
+# or, need to run on machine with more memory.
 
 impact <- list()
 impact$baseline <- modelcourse(scenario = "0", c, params, reps = reps)
 impact$novelrr <- modelcourse(scenario = "1a", c, params, reps = reps)
+impact$novelrrx <- modelcourse(scenario = "1x", c, params, reps = reps)
 impact$novelpantb <- modelcourse(scenario = "3", c, params, reps = reps)
 saveRDS(object = impact, file = paste0("impact.",date,".RDS"))
 
@@ -77,7 +78,7 @@ desiredsize <- 1e5 # how big to make each bootstrapped copy?
 bootsample <- function(c, include, desiredsize, course_outcomes) 
   {
   bootindex <- sample((1:nrow(c))[include], desiredsize, replace=T, prob=c$Freq[include]/sum(c$Freq[include]))
-  randindex <-  sample(1:dim(course)[[4]], size = desiredsize, replace=T)
+  randindex <-  sample(1:dim(course_outcomes)[[3]], size = desiredsize, replace=T)
   return(sapply(X = 1:dim(course_outcomes)[[1]], function(x) course_outcomes[cbind(x, bootindex, randindex)]))
   }
 #...which then feeds into
@@ -85,6 +86,17 @@ outcomeboot <- function(individualoutcomefunction, course, c, include=rep(1, dim
 {
     course_outcomes <- apply(X=course, FUN=individualoutcomefunction, MARGIN = c(1,4))
     return(replicate( copies, bootsample(c, include, desiredsize, course_outcomes)))
+}
+# or for a list of courses for different scenarios
+loutcomeboot <- function(individualoutcomefunction, simoutput, c, include=rep(1, dim(l[[1]])[[1]]), copies=10, desiredsize=1e4) 
+{
+  freqweights <- c$Freq # simoutput[[1]][,"Freq",1,1]
+  l <- lapply(simoutput, function(y) {  
+    
+    course_outcomes <- apply(X=y, FUN=individualoutcomefunction, MARGIN = c(1,4))
+    return(replicate( copies, bootsample(c, include, desiredsize, course_outcomes)))
+  } )
+  return(l)
 }
 
 # # example of an individualoutcomefunction:
@@ -94,6 +106,8 @@ outcomeboot <- function(individualoutcomefunction, course, c, include=rep(1, dim
 # }
 # patiententry <- impact$baseline[1,,,1]
 # fun(patiententry)
+# l <- loutcomeboot(fun, impact, c, include=include, copies=10, desiredsize=1e5)
+# str(l)
 # #or,
 # lastalive <- function(patiententry)
 # {
@@ -111,43 +125,24 @@ outcomeboot <- function(individualoutcomefunction, course, c, include=rep(1, dim
 # str(o)
 # # answer: the apply in outcomeboot corced the output of individualoutcomefunction to a vector.
 
-# and bootstrap from the results of that outcome funcntion
-# for one course:
-o <- outcomeboot(function(x) x["TBstate",c(4,8)], course=impact$baseline, c=c, include=include, copies=10, desiredsize=1e5)  
-str(o) # here, 1st dimension is new reflecting the outcome(x) of interest, with 2nd and 3rd reflecting variability. 2nd is what was the 1st in include or boot, and 3rd is what was the 4th. (i.e. the 2nd and 3rd dims of outcomeboot are just patients, differing across second dim and replicated across 3rd.)
-# or for a list of courses for different scenarios
-loutcomeboot <- function(individualoutcomefunction, simoutput, c, include=rep(1, dim(l[[1]])[[1]]), copies=10, desiredsize=1e4) 
-  {
-    freqweights <- c$Freq # simoutput[[1]][,"Freq",1,1]
-    l <- lapply(simoutput, function(y) {  
-  
-      course_outcomes <- apply(X=y, FUN=individualoutcomefunction, MARGIN = c(1,4))
-      return(replicate( copies, bootsample(c, include, desiredsize, course_outcomes)))
-    } )
-    return(l)
-  }
-  
-
-l <- loutcomeboot(fun, impact, c, include=include, copies=10, desiredsize=1e5)
-str(l)
 
 # example:  proportion diagnosed by step two:
 fun <- function(patiententry) { return(c(patiententry["TBstate",2]==2, NA))}
 l <- loutcomeboot(individualoutcomefunction = fun, impact, c, include=include, copies=50, desiredsize=1e5)
 lapply(l, function(x) summary(apply(x[,1,], 2, mean)))
-#very consistent across copies
+#very consistent across copies, but slight differences between scenarios (not consistent between runs of original simulation), suggesting need for reps>1000
 
 ####
 # plot states over time? this is by model step rather than time
-par(mfrow=c(1,1))
-barplot(array(unlist(apply(impact$baseline[,"TBstate",2:20,], 2, tabulate)), dim = c(8,19)), beside=F, col = rainbow(8), legend.text = names(statetypes))
+par(mfrow=c(2,2))
+lapply(impact, function(y) barplot(array(unlist(apply(y[,"TBstate",2:20,], 2, tabulate)), dim = c(8,19)), beside=F, col = rainbow(8), legend.text = names(statetypes)))
+
     
-    
-# snapshots by time interval: 
+ # snapshots by time interval: 
 require(RColorBrewer)
 colors <- palette(brewer.pal(length(statetypes), name = "Set2"))
 # require(colorspace); colors <- palette(rainbow_hcl(n = length(statetypes))); colors <- choose_palette()
-    
+
 # plot average states after first treatment attempt, for the equal-wieghted cohort:
 par(mfrow=c(1,1), oma=c(0,0,1,1))
 barplot(array(unlist(lapply(impact, FUN = function(x) tabulate(x[,"TBstate",8,]))), dim=c(length(statetypes),length(impact))), names.arg = names(impact), col=colors,
@@ -157,65 +152,90 @@ legend("right", legend = rev(names(statetypes)), fill=rev(colors), cex=1)
 # do the same but for the "include"+reweighted subset cohort of interest:
 # converting to weighted cohort:
 # first get the outcome of interest, here distribution of states and times(Added this) at time step 8:
-step8status <- function(patiententry) {patiententry[c("TBstate", "eventtime"),8] }
-#should really be useing 4 for "first round of treatment":
 step4status <- function(patiententry) {patiententry[c("TBstate", "eventtime"),4] } 
+step8status <- function(patiententry) {patiententry[c("TBstate", "eventtime"),8] }
 # and get that across the cohort:
-l <- loutcomeboot(step4status, impact, c, include=(c$RIF==1), copies=10, desiredsize = 100)
-#and then tabulate across the cohort and plot as before:
-par(mfrow=c(1,1), oma=c(0,0,1,1))
+l <- loutcomeboot(function(patiententry) {patiententry[c("TBstate", "eventtime"),4] }, impact, c, include=(c$RIF==1), copies=100, desiredsize = 1e4)
 barplot(array(unlist(lapply(l, FUN = function(x) tabulate(x[,1,]))), dim=c(length(statetypes),length(impact))), names.arg = names(impact), col=colors,
         main="Distribution of states after first round of treatment", yaxt='n')
 legend("right", legend = rev(names(statetypes)), fill=rev(colors), cex=1)
+l <- loutcomeboot(step8status, impact, c, include=(c$RIF==1), copies=100, desiredsize = 1e4)
+par(mfrow=c(1,1), oma=c(0,0,1,1))
+barplot(array(unlist(lapply(l, FUN = function(x) tabulate(x[,1,]))), dim=c(length(statetypes),length(impact))), names.arg = names(impact), col=colors,
+        main="Distribution of states after second round of treatment", yaxt='n')
+legend("right", legend = rev(names(statetypes)), fill=rev(colors), cex=1)
+# benefit for novelrrx over novelrr is more than the increase in Xpert coverage, because the new pts whose xpert increases most had longest TBmortality exposure
+# additional benefit of pantB here is those whose TB or RR is missed by Xpert? ~10% for TB and another 5% rif
+
+
+l <- loutcomeboot(function(patiententry) {patiententry["TBstate",] }, impact, c, include=(c$RIF==0), copies=10, desiredsize = 1e4)
+lapply(l, function(x) apply(x[,2,], 2, tabulate))
+# I've checked code thoroughly, am confident differences here for timestep 2 are due to chance but indicate need to increase reps in initial simulatio
+
 # can do the same for a different subset:
-l <- loutcomeboot(step4status, impact, include=(c$MOXI==1), copies=5, desiredsize = 1e4)
+l <- loutcomeboot(step4status, impact, c, include=(c$MOXI==1), copies=5, desiredsize = 1e4)
 #and then tabulate across the cohort and plot as before:
 par(mfrow=c(1,1), oma=c(0,0,1,1))
-barplot(array(unlist(lapply(l, FUN = function(x) tabulate(x[1,,]))), dim=c(length(statetypes),length(impact))), names.arg = names(impact), col=colors,
-        main="Distribution of states after first round of treatment", yaxt='n')
+barplot(array(unlist(lapply(l, FUN = function(x) tabulate(x[,1,]))), dim=c(length(statetypes),length(impact))), names.arg = names(impact), col=colors,
+        main="Outcomes among FQ-r patients:\n", yaxt='n')
 legend("right", legend = rev(names(statetypes)), fill=rev(colors), cex=1)
-
+#for Moxi R, Rif S patients, novel regimen looks same or slightly worse
     
 # Differences compared to baseline: 
 # in proportion cured after 1st round:
 par(mfrow=c(1,1), oma=c(0,0,1,1), mar=c(3,3,3,1))
 step4812cure <- function(patiententry) {patiententry[c("TBstate"),c(4, 8, 12)]=="7" } 
-l <- loutcomeboot(step4812cure, impact, include=(c$RIF==1), copies=5, desiredsize = 1e4)
-apply(l$baseline[1,,],2, mean)
-boxplot(lapply(l, function(y) apply(y[1,,],2, mean) - apply(l$baseline[1,,],2, mean)),
-        main="Incremental proportion of cohort cured after first treatment,\ncompared to baseline average", col=colors[2:6])
+l <- loutcomeboot(step4812cure, impact, c, include=(c$RIF==1), copies=50, desiredsize = 1e5)
+boxplot(lapply(l, function(y) apply(y[,1,]- apply(l$baseline[,1,],2, mean), 2, mean)),
+        main="Incremental proportion of RIF-R cohort cured after first treatment,\ncompared to baseline average", col=colors[2:6])
+boxplot(lapply(l, function(y) apply(y[,1,], 2, mean)),
+        main="Proportion of RIF-R cohort cured after first treatment", col=colors[2:6])
 
 
-#*** need to run these SA to generate outcomes/impact; this code is from last summer
-# showing with and without regimen delays:
-a <- data.frame(lapply(outcomes_nodelays[2:6], function(y) apply(y, 4, function(x) mean(x[,"TBstate",4]==statetypes$cured)-mean(outcomes$baseline[,"TBstate",4,]==statetypes$cured))))
-a$params <- "No delays"
-b <- data.frame(lapply(outcomes_regimendelays[2:6], function(y) apply(y, 4, function(x) mean(x[,"TBstate",4]==statetypes$cured)-mean(outcomes$baseline[,"TBstate",4,]==statetypes$cured))))
-b$params <- "Regimen delays"
-c <- data.frame(lapply(outcomes_DSTdelays[2:6], function(y) apply(y, 4, function(x) mean(x[,"TBstate",4]==statetypes$cured)-mean(outcomes$baseline[,"TBstate",4,]==statetypes$cured))))
-c$params <- "DST delays"
-require(dplyr)
-require(data.table)
-m <- bind_rows(a,b,c)
-mm <- melt(m, id.vars="params")        
-colnames(mm) <- c("Parameters", "Scenario", "Cureincrease")
-mm$Parameters <- factor(mm$Parameters, levels=c("No delays", "Regimen delays", "DST delays"))
-require(ggplot2)
-ggplot(data = mm, aes(x=Scenario, y=Cureincrease)) + 
-  geom_boxplot(aes(fill=Parameters)) + 
-  ggtitle("Increase in proportion of cohort cured after first treatment,\ncompared to baseline scenario") + theme(plot.title = element_text(hjust = 0.5)) + 
-  ylab("Incremental proportion cured")
+# SA: delays -- need to clean up code if using, and consider which scenarios I want to show with and without delays (xpertxdr??)
+# saveparams <- params
+# allparams <- read.csv("allparams.csv", header=T, stringsAsFactors = F)
+# params <- as.numeric(allparams[,2]); names(params) <- allparams[,1]
+# params["Regimendelay"] <- 0
+# regimendelays <- list()
+# regimendelays$none <- impact$novelpantb
+# delays$DST <-  modelcourse(scenario = "3", c, params, reps = reps)
+# params <- saveparams 
+# params["DSTdelay"] <- 0
+# delays$regimen <-  modelcourse(scenario = "3", c, params, reps = reps)
+# params <- saveparams 
+# 
+# # showing with and without regimen delays:
+# d <- lapply(loutcomeboot(step4812cure, delays, c, include=(rep(1, length=nrow(c))), copies=50, desiredsize = 1e5), function(y) apply(y[,1,], 2, mean))
+# str(d)
+# a <- data.frame(d, lapply(outcomes_nodelays[2:6], function(y) apply(y, 4, function(x) mean(x[,"TBstate",4]==statetypes$cured)-mean(outcomes$baseline[,"TBstate",4,]==statetypes$cured))))
+# a$params <- "No delays"
+# b <- data.frame(lapply(outcomes_regimendelays[2:6], function(y) apply(y, 4, function(x) mean(x[,"TBstate",4]==statetypes$cured)-mean(outcomes$baseline[,"TBstate",4,]==statetypes$cured))))
+# b$params <- "Regimen delays"
+# c <- data.frame(lapply(outcomes_DSTdelays[2:6], function(y) apply(y, 4, function(x) mean(x[,"TBstate",4]==statetypes$cured)-mean(outcomes$baseline[,"TBstate",4,]==statetypes$cured))))
+# c$params <- "DST delays"
+# require(dplyr)
+# require(data.table)
+# m <- bind_rows(a,b,c)
+# mm <- melt(m, id.vars="params")        
+# colnames(mm) <- c("Parameters", "Scenario", "Cureincrease")
+# mm$Parameters <- factor(mm$Parameters, levels=c("No delays", "Regimen delays", "DST delays"))
+# require(ggplot2)
+# ggplot(data = mm, aes(x=Scenario, y=Cureincrease)) + 
+#   geom_boxplot(aes(fill=Parameters)) + 
+#   ggtitle("Increase in proportion of cohort cured after first treatment,\ncompared to baseline scenario") + theme(plot.title = element_text(hjust = 0.5)) + 
+#   ylab("Incremental proportion cured")
     
 
 # as a heat map (don't group by state)
-par(mfrow=c(3,1), mar=c(4,4,1,1), oma=c(1,1,1,1))
+par(mfrow=c(2,2), mar=c(4,4,1,1), oma=c(1,1,1,1))
 times <- 0:30
-whichpts<-include #** can change here, should change title to match
+whichpts<-c$RIF==1 #** can change here, should change title to match
 mapply(FUN = function(a, b) { y <- a[whichpts,,,1]; 
 image( 
   do.call('rbind', lapply(times, function(t) y[, "TBstate",][cbind(1:dim(y)[[1]], apply(y[,"eventtime",], 1, function(x) 
     ifelse(max(x)>t, which.max(x>t) -1, length(x)) ))])),
-  col=colors, xaxt='n', yaxt='n', main=paste0(length(whichpts)," representative patients, ",b));
+  col=colors, xaxt='n', yaxt='n', main=paste0(length(whichpts)," patient types, ",b));
 axis(side = 1, labels = times, at = seq(0,1,length=length(times)))
 },
 impact, names(impact))
@@ -229,19 +249,19 @@ image(
 axis(side = 1, labels = times, at = seq(0,1,length=length(times)))
 },
 impact, names(impact))
-legend("bottomright", legend = (names(statetypes)), fill=(colors), cex=1)
+legend("bottomright", legend = (names(statetypes)), fill=(colors), cex=0.8)
 mtext(text = "months", side = 1, outer=T, line=-1)
 mtext(text = "Each horizontal line represents one realization of the patient's course", side = 2, outer=T, line=-1)
 
 # for one run, sorted:
 par(mfrow=c(1,1), mar=c(4,4,1,1), oma=c(1,1,1,1))
 times <- seq(0,30,by=1)
-y <- loutcomeboot(function(x) x[c("eventtime","TBstate"),], impact, include=(c$RIF==1), copies=1, desiredsize = 1e4)$baseline
-z <- abind(y[seq(1,45,by=2),,1], y[seq(2,46,by=2),,1], along = 3, new.names = list("step"=1:23, "patient"=1:1e4, "a"=c("time","state")))
+y <- loutcomeboot(function(x) x[c("eventtime","TBstate"),], impact, c, include=(c$RIF==1), copies=1, desiredsize = 1e5)$baseline
+z <- abind(y[,seq(1,45,by=2),1], y[,seq(2,46,by=2),1], along = 3, new.names = list("patient"=1:1e5, "step"=1:23, "a"=c("time","state")))
 barplot(xlab = "months elapsed", ylab="patients in cohort", border = NA, 
         t(array(do.call('rbind', lapply(times, function(t) 
           tabulate(unlist( z[, ,"state"][
-            cbind(apply(z[,,"time"], 2, function(x) ifelse(max(x)>t, which.max(x>t)-1, length(x)) ), 1:dim(z)[[2]])]), nbins = length(statetypes))
+            cbind(1:dim(z)[[2]], apply(z[,,"time"], 1, function(x) ifelse(max(x)>t, which.max(x>t)-1, length(x)) ))]), nbins = length(statetypes))
         )), dim=c(length(times), length(statetypes)), dimnames=list("time"=times, "state"=names(statetypes)))), 
         col=colors, beside=F)
 legend("topright", legend = rev(names(statetypes)), fill=rev(colors), cex=0.8)
@@ -252,10 +272,10 @@ msort <- function(m)
 
 par(mfrow=c(1,1), mar=c(4,4,1,1), oma=c(1,1,1,1))
 times <- seq(0,30,by=0.1)
-y <- loutcomeboot(function(x) x[c("eventtime","TBstate"),], impact, include=(c$RIF==1), copies=1, desiredsize = 1e4)$baseline
-z <- abind(y[seq(1,45,by=2),,1], y[seq(2,46,by=2),,1], along = 3, new.names = list("step"=1:23, "patient"=1:1e4, "a"=c("time","state")))
-m <- do.call('rbind', lapply(times, function(t) z[, ,"state"][cbind(apply(z[,,"time"], 2, function(x)
-  ifelse(max(x)>t, which.max(x>t) -1, length(x)) ), 1:dim(z)[[2]])]))
+y <- loutcomeboot(function(x) x[c("eventtime","TBstate"),], impact, c, include=(c$RIF==1), copies=1, desiredsize = 1e4)$baseline
+z <- abind(y[,seq(1,45,by=2),1], y[,seq(2,46,by=2),1], along = 3, new.names = list("patient"=1:1e4, "step"=1:23, "a"=c("time","state")))
+m <- do.call('rbind', lapply(times, function(t) z[, ,"state"][cbind(1:dim(z)[[2]], apply(z[,,"time"], 1, function(x)
+  ifelse(max(x)>t, which.max(x>t) -1, length(x)) ))]))
 image(t(msort(t(m))), col=colors, xaxt='n', yaxt='n')
 legend("bottomleft", legend = rev(names(statetypes)), fill=rev(colors), cex=0.8)
 axis(side = 1, labels = times, at = seq(0,1,length=length(times)))
@@ -263,15 +283,15 @@ mtext(text = "months", side = 1, line=2)
 mtext(text = "cohort", side = 2, line=2)
     
 # for multiple scenarios, bar plots, :
-par(mfrow=c(3,1), mar=c(4,4,1,1), oma=c(1,1,2,1))
+par(mfrow=c(2,2), mar=c(4,4,1,1), oma=c(1,1,2,1))
 times <- seq(0,30,by=1)
-yl <- loutcomeboot(function(x) x[c("eventtime","TBstate"),], impact, include=(c$RIF==0), copies=1, desiredsize = 1e4)
-zl <- lapply(yl, function(y) abind(y[seq(1,45,by=2),,1], y[seq(2,46,by=2),,1], along = 3, new.names = list("step"=1:23, "patient"=1:1e4, "a"=c("time","state"))))
+yl <- loutcomeboot(function(x) x[c("eventtime","TBstate"),], impact, c, include=(c$RIF==1), copies=1, desiredsize = 1e4)
+zl <- lapply(yl, function(y) abind(y[,seq(1,45,by=2),1], y[,seq(2,46,by=2),1], along = 3, new.names = list("patient"=1:1e4, "step"=1:23, "a"=c("time","state"))))
 mapply( function(z, b)
   { barplot(xlab = "months elapsed", ylab="patients in cohort", border = NA, 
         t(array(do.call('rbind', lapply(times, function(t) 
           tabulate(unlist( z[, ,"state"][
-            cbind(apply(z[,,"time"], 2, function(x) ifelse(max(x)>t, which.max(x>t)-1, length(x)) ), 1:dim(z)[[2]])]), nbins = length(statetypes))
+            cbind(1:dim(z)[[1]]), apply(z[,,"time"], 1, function(x) ifelse(max(x)>t, which.max(x>t)-1, length(x)) )]), nbins = length(statetypes))
         )), dim=c(length(times), length(statetypes)), dimnames=list("time"=times, "state"=names(statetypes)))), 
         col=colors, beside=F, main=b) }, zl, names(zl))
 legend("bottomleft", legend = rev(names(statetypes)), fill=rev(colors), cex=1)

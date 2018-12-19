@@ -136,17 +136,18 @@ set.scenario <- function(scenario="0")
   intervention <- within(intervention,
                          {
                            # treatment focused analyses
-                           if (scenario=="0") { regimen_s <- "hrze"; regimen_r <- "mdr"; xpertxdr <- "none" }
-                           if (scenario=="1a") { regimen_s <- "hrze"; regimen_r <- "bpamz6"; xpertxdr <- "none" }  
-                           if (scenario=="3") { regimen_s <- "bpamz4"; regimen_r <- "bpamz6"; xpertxdr <- "none" }  
+                           if (scenario=="0") { regimen_s <- "hrze"; regimen_r <- "mdr"; xpertxdr <- "none"; allxpert<-FALSE }
+                           if (scenario=="1a") { regimen_s <- "hrze"; regimen_r <- "bpamz6"; xpertxdr <- "none"; allxpert<-FALSE }  
+                           if (scenario=="1x") {regimen_s <- "hrze"; regimen_r <- "bpamz6"; xpertxdr <- "none"; allxpert<-TRUE}
+                           if (scenario=="3") { regimen_s <- "bpamz4"; regimen_r <- "bpamz6"; xpertxdr <- "none"; allxpert<-FALSE }  
                             #possibly also including no Xpert at all approaches:
-                           if (scenario=="2a") { regimen_s <- "bpamz4"; regimen_r <- "bpamz4"; xpertxdr <- "none" }  
-                           if (scenario=="2b") { regimen_s <- "bpamz6"; regimen_r <- "bpamz6"; xpertxdr <- "none" }  
+                           if (scenario=="2a") { regimen_s <- "bpamz4"; regimen_r <- "bpamz4"; xpertxdr <- "none"; allxpert<-FALSE  }  
+                           if (scenario=="2b") { regimen_s <- "bpamz6"; regimen_r <- "bpamz6"; xpertxdr <- "none"; allxpert<-FALSE  }  
 
                            # DST focused analyses, universal regimens:
                            # if (scenario=="3") { regimen_s <- "bpamz4"; regimen_r <- "bpamz6"; xpertxdr <- "none" }  
-                           if (scenario=="4") { regimen_s <- "bpamz4"; regimen_r <- "bpamz6"; xpertxdr <- "stepwise" }  
-                           if (scenario=="5") { regimen_s <- "bpamz4"; regimen_r <- "bpamz6"; xpertxdr <- "simultaneous" }  
+                           if (scenario=="4") { regimen_s <- "bpamz4"; regimen_r <- "bpamz6"; xpertxdr <- "stepwise"; allxpert<-FALSE  }  
+                           if (scenario=="5") { regimen_s <- "bpamz4"; regimen_r <- "bpamz6"; xpertxdr <- "simultaneous"; allxpert<-FALSE  }  
                            
                            # # and could consider DST question for MDR only (but too much complexity re baseline DST andconventional XDR regimens):
                            # if (scenario=="1a") { regimen_s <- "hrze"; regimen_r <- "bpamz6"; xpertxdr <- "none" }  
@@ -176,6 +177,7 @@ Xpertdone <- function(scenario, patient, params, stochasticmode=TRUE)
 {
   if (missing(scenario)) scenario <- "0"
   intervention <- set.scenario(scenario)
+  if(intervention$allxpert) params["Xpert_current_new"] <- params["Xpert_current_rerx"] <- 1
   
   N <- nrow(patient)
   
