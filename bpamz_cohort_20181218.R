@@ -384,7 +384,7 @@ diagnosisevent <- function(last, params, N, eventtypes, statetypes, regimentypes
 {
   current <- last
   
-  # ** could later change the diagnosis time distribution to something less skewed
+  # ** could later change the diagnosis time distribution (and same for mortallity etc?) to something less skewed
   needdiagnosis <- ((last[,"TBstate"]==statetypes$undiagnosed)|(last[,"TBstate"]==statetypes$failed))
   dxtime <- rexp(N, 1/(last[,"RxHist"]*params["Tbdxtime_recurrence"] + (1-last[,"RxHist"])*params["Tbdxtime"]))
   
