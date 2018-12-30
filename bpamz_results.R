@@ -45,12 +45,13 @@ outcomeboot <- function(individualoutcomefunction, course, c, include=rep(1, dim
   return(replicate( copies, bootsample(c, include, desiredsize, course_outcomes)))
 }
 # or for a list of courses for different scenarios
-loutcomeboot <- function(individualoutcomefunction, simoutput, c, include=rep(1, nrow(c)), copies=10, desiredsize=1e4, course_outcomes=NA) 
+loutcomeboot <- function(individualoutcomefunction, simoutput, c, 
+                         include=rep(1, nrow(c)), copies=10, desiredsize=1e4, course_outcomes=NA, ...) 
 {
   freqweights <- c$Freq # simoutput[[1]][,"Freq",1,1]
   l <- lapply(simoutput, function(y) {  
     
-    if(is.na(course_outcomes)) course_outcomes <- apply(X=y, FUN=individualoutcomefunction, MARGIN = c(1,4))
+    if(is.na(course_outcomes)) course_outcomes <- apply(X=y, FUN=individualoutcomefunction, MARGIN = c(1,4), ...)
     return(replicate( copies, bootsample(c, include, desiredsize, course_outcomes)))
   } )
   return(l)
@@ -213,21 +214,21 @@ barplot(xlab = "months elapsed", ylab="patients in cohort", border = NA,
 legend("topright", legend = rev(names(statetypes)), fill=rev(colors), cex=0.8)
 mtext("Status of RIF-R patients over time, in baseline scenario (no novel regimen)", side=3)
 
-# for one run, sorted but in heatmap mode:
-msort <- function(m)
-{return(m[do.call(order, c(decreasing = FALSE, data.frame(m[,1:ncol(m)]))),])}
-
-par(mfrow=c(1,1), mar=c(4,4,1,1), oma=c(1,1,1,1))
-times <- seq(0,30,by=0.1)
-y <- loutcomeboot(function(x) x[c("eventtime","TBstate"),], impact, c, include=(c$RIF==1), copies=1, desiredsize = 1e4)$baseline
-z <- abind(y[,seq(1,45,by=2),1], y[,seq(2,46,by=2),1], along = 3, new.names = list("patient"=1:1e4, "step"=1:23, "a"=c("time","state")))
-m <- do.call('rbind', lapply(times, function(t) z[, ,"state"][cbind(1:dim(z)[[2]], apply(z[,,"time"], 1, function(x)
-  ifelse(max(x)>t, which.max(x>t) -1, length(x)) ))]))
-image(t(msort(t(m))), col=colors, xaxt='n', yaxt='n')
-legend("bottomleft", legend = rev(names(statetypes)), fill=rev(colors), cex=0.8)
-axis(side = 1, labels = times, at = seq(0,1,length=length(times)))
-mtext(text = "months", side = 1, line=2)
-mtext(text = "cohort", side = 2, line=2)
+# # for one run, sorted but in heatmap mode:
+# msort <- function(m)
+# {return(m[do.call(order, c(decreasing = FALSE, data.frame(m[,1:ncol(m)]))),])}
+# 
+# par(mfrow=c(1,1), mar=c(4,4,1,1), oma=c(1,1,1,1))
+# times <- seq(0,30,by=0.1)
+# y <- loutcomeboot(function(x) x[c("eventtime","TBstate"),], impact, c, include=(c$RIF==1), copies=1, desiredsize = 1e4)$baseline
+# z <- abind(y[,seq(1,45,by=2),1], y[,seq(2,46,by=2),1], along = 3, new.names = list("patient"=1:1e4, "step"=1:23, "a"=c("time","state")))
+# m <- do.call('rbind', lapply(times, function(t) z[, ,"state"][cbind(1:dim(z)[[2]], apply(z[,,"time"], 1, function(x)
+#   ifelse(max(x)>t, which.max(x>t) -1, length(x)) ))]))
+# image(t(msort(t(m))), col=colors, xaxt='n', yaxt='n')
+# legend("bottomleft", legend = rev(names(statetypes)), fill=rev(colors), cex=0.8)
+# axis(side = 1, labels = times, at = seq(0,1,length=length(times)))
+# mtext(text = "months", side = 1, line=2)
+# mtext(text = "cohort", side = 2, line=2)
 
 # for multiple scenarios, bar plots, :
 par(mfrow=c(2,2), mar=c(4,4,1,1), oma=c(1,1,2,1))
@@ -254,6 +255,7 @@ mtext("Status of RIF-R cohort over time", side=3, font=2, outer=T)
 
 # redefining from cohort file, for single-patient course:
 # but note that need to keep characteristics here, and call this function with an include of all pts at risk for the characteristic, not just those who have it at baseline (e.g. when talking about adr)
+# will return time in states of interest, and final tbstate
 time.in.state <- function(patiententry, states=8, characteristics=c(), characteristicvals=1, cutofftime=100*12, carryforward=F)
 {
   elapsedtimes <- patiententry["eventtime",2:ncol(patiententry)] - patiententry["eventtime",1:((ncol(patiententry))-1)] 
@@ -266,19 +268,16 @@ time.in.state <- function(patiententry, states=8, characteristics=c(), character
   if (carryforward) 
     if (patiententry["TBstate",ncol(patiententry)] %in% states)
       t <- t + max(0, cutofftime-patiententry["eventtime",ncol(patiententry)])
-  return(t)
+  return(c(t, patiententry["TBstate",ncol(patiententry)]))
 }
-time.in.state(patiententry, states=c(1:6), characteristics = c("RxHist"), cutofftime=24, carryforward = T)
-
 
 # tally up time alive: # need to cut all scenarios off at the same point, say 3 years:
-timealive =time.in.state, states=1:7, cutofftime=3*12, carryforward=T,
-l <- loutcomeboot(individualoutcomefunction =time.in.state, states=1:7, cutofftime=3*12, carryforward=T, 
+l <- loutcomeboot(individualoutcomefunction =time.in.state, states=5:6, cutofftime=5*12, carryforward=T, 
                   simoutput=impact, c=c, include=(c$RIF==1), copies = 3, desiredsize = 1e4)
+lapply(l, function(x) apply(x[,1,],2,mean))
+# why is survival staying same or going down with novelrr for RIF==1?? (same for MXOI==0) need to recheck with larger iniital sim **
+# for MOXI==1, the lack of benefit of pantb is expected. 
 
-
-(c <- lapply(impact, function(y) apply(y, 4, function(x) ) ))
-unlist(lapply(c,function(x) mean(x["Mean",]))); unlist(lapply(c,function(x) sd(x["Mean",])))
 # incremental months of life per patient: 
 unlist(lapply(c,function(x) summary(x["Mean",]-mean(c$baseline["Mean",])))); unlist(lapply(c,function(x) sd(x["Mean",])))
 # plot years of life gained within first [3] years:

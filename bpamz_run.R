@@ -1,9 +1,11 @@
 # setwd("C:/Users/ekendal2/OneDrive - Johns Hopkins University/Research/universal regimen/universal")
 source("bpamz_cohort.R")
 
-date <- "20181229"
+date <- "20181230"
 
-cohortsize <- 1e8 # 1e7 is barely enough to capture all but the rarest combinations at least once. Really using this to get freqs, and would be easier to just calculate probs rather than creating a cohort but I've already done this so will go with it. Should use 18e, but that req's >4g memory.
+cohortsize <- 1e8 
+# 1e7 is barely enough to capture all but the rarest combinations at least once. Really using this to get freqs, and would be easier to just calculate probs rather than creating a cohort but I've already done this so will go with it. Should use 1e8, but that req's >>4gb memory.
+
 # make the cohort
 cohort <- make.cohort(params=params, patientvars = patientvars, N=cohortsize)
 c <- as.data.frame(table(cohort),stringsAsFactors = F)
@@ -11,14 +13,14 @@ c[rev(order(c$Freq)),]
 c[] <- lapply(c, function(x) as.numeric(x))
 distincts_with_freqs <- c[rev(order(c$Freq)),] # rather than modeling based on frequency in the population, model each patient type the same number of times and then bootstrap (if we increase the number of different types, may want to model the common types more than the rarer types)
 c <- distincts_with_freqs %>% filter(MOXI==1|partialmoxi==0) # an imposible combo as coded
-save(c, file="cohort.Rdata")
+save(c, file=paste0("cohort.",date,".Rdata"))
 
-load("cohort.Rdata")
+load(paste0("cohort.",date,".Rdata"))
 sum(c$Freq)
 tail(c %>% filter(INH==1|RIF==0)) # Rif monos essentially don't exist in India, so checking that other combos aren't missing
 nrow(c %>% filter(Freq>0)) # number of patient types to be run, ~140 for India
 c <- c %>% filter(Freq>0)
-reps <- 1e2 # how many reps of each patient type to run? (will then sample Freq of each to recreate original cohort or subset thereof)
+reps <- 1e4 # how many reps of each patient type to run? (will then sample Freq of each to recreate original cohort or subset thereof)
 # 1e3 already gives a >1GB list for 3 scenarios, so may want to filter the cohort (e.g. to RR of FQ-R only) before the next step.  
 # or, need to run on machine with more memory.
 
@@ -28,7 +30,7 @@ impact$novelrr <- modelcourse(scenario = "1a", c, params, reps = reps)
 impact$novelrrx <- modelcourse(scenario = "1x", c, params, reps = reps)
 impact$novelpantb <- modelcourse(scenario = "3", c, params, reps = reps)
 saveRDS(object = impact, file = paste0("impact.",date,".RDS"))
-impact <- readRDS(file = "impact.20181218.RDS")
+# impact <- readRDS(file = "impact.20181218.RDS")
 
 dst <- list()
 dst$noxxdr <- modelcourse(scenario = "3", c, params, reps = reps)

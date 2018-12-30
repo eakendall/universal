@@ -356,6 +356,7 @@ make.adr.matrix <- function()
 
 ## FIRST EVENT ##
 # TB diagnosis, not with tbdxtime from an exponential distribution
+# ignoring here any who will spontaneously resolve before diagnosis or death, and assuming that those who fail or felapse won't spontaneously resolve (or won't be inncluded among documented relapse rates)
 diagnosisevent <- function(last, params, N, eventtypes, statetypes, regimentypes)
 {
   current <- last
@@ -563,29 +564,29 @@ addnaturalmortality <- function(last, params, N, eventtypes, statetypes, maxtime
   return(current)
 }
 
-time.in.state <- function (states, course, characteristics=c(), cutofftime=100*12, carryforward=F) 
-{
-  elapsedtimes <- course[,"eventtime",2:((dim(course))[[3]])] - course[,"eventtime",1:(((dim(course))[[3]])-1)] 
-  elapsedtimes[course[,"eventtime",2:((dim(course))[[3]])]>cutofftime] <- cutofftime - (course[,"eventtime",1:(((dim(course))[[3]])-1)])[course[,"eventtime",2:((dim(course))[[3]])]>cutofftime]
-  elapsedtimes[elapsedtimes<0] <- 0
-  t <- rep(0, dim(course)[[1]])
-  for (state in states[1:length(states)]){
-    indices <-  course[,"TBstate",1:((dim(course))[[3]]-1)] == statetypes[[state]]
-    if(length(characteristics)==1) indices <- indices & course[,characteristics,1:((dim(course))[[3]]-1)] >0
-    if(length(characteristics)>1) indices <- indices & apply(course[,characteristics,1:((dim(course))[[3]]-1)] >0, 1, all)
-    t <- t + rowSums(elapsedtimes*indices)
-    if (carryforward) {
-      laststep <- course[,"TBstate",dim(course)[[3]]] == statetypes[[state]]
-      extratime <- cutofftime-course[laststep,"eventtime",dim(course)[[3]]]
-      extratime[extratime<0] <- 0
-      t[laststep] <- t[laststep] + extratime
-    }
-  }
-  return( summary(t))
-}
+# time.in.state <- function (states, course, characteristics=c(), cutofftime=100*12, carryforward=F) 
+# {
+#   elapsedtimes <- course[,"eventtime",2:((dim(course))[[3]])] - course[,"eventtime",1:(((dim(course))[[3]])-1)] 
+#   elapsedtimes[course[,"eventtime",2:((dim(course))[[3]])]>cutofftime] <- cutofftime - (course[,"eventtime",1:(((dim(course))[[3]])-1)])[course[,"eventtime",2:((dim(course))[[3]])]>cutofftime]
+#   elapsedtimes[elapsedtimes<0] <- 0
+#   t <- rep(0, dim(course)[[1]])
+#   for (state in states[1:length(states)]){
+#     indices <-  course[,"TBstate",1:((dim(course))[[3]]-1)] == statetypes[[state]]
+#     if(length(characteristics)==1) indices <- indices & course[,characteristics,1:((dim(course))[[3]]-1)] >0
+#     if(length(characteristics)>1) indices <- indices & apply(course[,characteristics,1:((dim(course))[[3]]-1)] >0, 1, all)
+#     t <- t + rowSums(elapsedtimes*indices)
+#     if (carryforward) {
+#       laststep <- course[,"TBstate",dim(course)[[3]]] == statetypes[[state]]
+#       extratime <- cutofftime-course[laststep,"eventtime",dim(course)[[3]]]
+#       extratime[extratime<0] <- 0
+#       t[laststep] <- t[laststep] + extratime
+#     }
+#   }
+#   return( summary(t))
+# }
 
 
-# function to model a set of patients through a first treatment course and a diagnosed failure or relapse (to get total time with infectious TB due to initial treatmetn decisions)
+# function to model a set of patients through a TB episode
 require(abind)
 require(rlist)
 require(prodlim)
@@ -608,37 +609,28 @@ modelcourse <- function(scenario="0", cohort, params, reps=1, steplimit=20, stoc
   
   # for each separate patient, determine their course: 
   # (act on current event, save current to course when move to next event)
-  
   course <- abind(course, diagnosisevent(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
-  
-  
   course <- abind(course, treatmentinitiationattempt(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes, scenario), along=3)
-  
   course <- abind(course, treatmentend(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
-  
-  
   course <- abind(course, relapseevent(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
-  
-  
+
   ## and back to event 5= DIAGNOSIS AGAIN ## 
   course <- abind(course, diagnosisevent(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
-  
   course <- abind(course, treatmentinitiationattempt(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes, scenario), along=3)
-  
   course <- abind(course, treatmentend(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
-  
   course <- abind(course, relapseevent(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
   
-  course <- abind(course, diagnosisevent(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
-  
-  while(dim(course)[3]<steplimit & mean(course[,"eventtype",dim(course)[[3]]]==7 | course[,"eventtime",dim(course)[[3]]] > 20*12)<1)
+  #continue to loop up to sooner of steplimit/4 loops or no more (uncured or dead) or those still alive and uncured have run for 20 years:
+  while(dim(course)[3]<steplimit & 
+        mean(course[,"eventtype",dim(course)[[3]]] %in% c(statetypes$deceased, statetypes$cured))<1 & 
+        mean(course[,"eventtime",dim(course)[[3]]][!course[,"eventtype",dim(course)[[3]]] %in% c(statetypes$deceased, statetypes$cured)] > 20*12)<1)
   {
+    course <- abind(course, diagnosisevent(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
     course <- abind(course, treatmentinitiationattempt(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes, scenario), along=3)
     course <- abind(course, treatmentend(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
     course <- abind(course, relapseevent(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
-    course <- abind(course, diagnosisevent(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
   }
-  
+    
   course <- abind(course, addnaturalmortality(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, maxtime = max(course[,"eventtime",])), along=3)
   
   newcourse <- array(course, dim=c(dim(course)[1]/reps,reps,dim(course)[2:3]))
