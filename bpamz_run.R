@@ -15,14 +15,13 @@ distincts_with_freqs <- c[rev(order(c$Freq)),] # rather than modeling based on f
 c <- distincts_with_freqs %>% filter(MOXI==1|partialmoxi==0) # an imposible combo as coded
 save(c, file=paste0("cohort.",date,".Rdata"))
 
-load(paste0("cohort.",date,".Rdata"))
 sum(c$Freq)
 tail(c %>% filter(INH==1|RIF==0)) # Rif monos essentially don't exist in India, so checking that other combos aren't missing
 nrow(c %>% filter(Freq>0)) # number of patient types to be run, ~140 for India
 c <- c %>% filter(Freq>0)
-reps <- 1e4 # how many reps of each patient type to run? (will then sample Freq of each to recreate original cohort or subset thereof)
+reps <- 5e3 # how many reps of each patient type to run? (will then sample Freq of each to recreate original cohort or subset thereof)
 # 1e3 already gives a >1GB list for 3 scenarios, so may want to filter the cohort (e.g. to RR of FQ-R only) before the next step.  
-# or, need to run on machine with more memory.
+# or, need to run sims and analyses on machine with more memory.
 
 impact <- list()
 impact$baseline <- modelcourse(scenario = "0", c, params, reps = reps)
@@ -30,7 +29,6 @@ impact$novelrr <- modelcourse(scenario = "1a", c, params, reps = reps)
 impact$novelrrx <- modelcourse(scenario = "1x", c, params, reps = reps)
 impact$novelpantb <- modelcourse(scenario = "3", c, params, reps = reps)
 saveRDS(object = impact, file = paste0("impact.",date,".RDS"))
-# impact <- readRDS(file = "impact.20181218.RDS")
 
 dst <- list()
 dst$noxxdr <- modelcourse(scenario = "3", c, params, reps = reps)

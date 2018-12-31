@@ -21,7 +21,7 @@ drugs <- c("RIF", "INH", "PZA", "MOXI", "partialmoxi","BDQ", "PA")
 regimens <- c("hrze", "mdr", "bpamz4", "bpamz6", "bpal", "backup", "backup_mdr")
 # activeregimens <- c("HR(ZE)","R(ZE)","(ZE)","MDR, FQ-S","MDR, FQ-R","BPaMZ","BPaM","BPaZ","BMZ","PaMZ",
 #                     "BPa","BZ","BM","PaZ","PaM","MZ","B","Pa","M","Z","BPaL","BL","PaL","L","none")
-activeregimens <- c("HR(ZE)","R(ZE)","(ZE)","MDR, FQ-S","MDR, FQ-low","MDR, FQ-R","BPaMZ","BPaM","BPaZ","BPamZ", "BMZ","PaMZ",
+activeregimens <- c("HR(ZE)","R(ZE)","H(ZE)","(ZE)","MDR, FQ-S","MDR, FQ-low","MDR, FQ-R","BPaMZ","BPaM","BPaZ","BPamZ", "BMZ","PaMZ",
                     "BPa","BPam", "BZ","BmZ", "BM","PaZ","PamZ", "PaM","MZ","B","Bm", "Pa","Pam","M","Z","mZ","BPaL","BL","PaL","L","m","none")
 patientvars <- c("RxHist", "NovelHist","HIV", "SmearStatus", drugs)
 
@@ -258,7 +258,7 @@ make.active.regimen.matrix <- function()
   resistance <- resistance %>% filter(MOXI==1 | partialmoxi==0)
   active <- cbind(resistance, array(NA, dim=c(nrow(resistance), length(regimens))))
   colnames(active) <- c(drugs, regimens)
-  active[,"hrze"] <- ifelse(active[,"RIF"]==1, "(ZE)", ifelse(active[,"INH"]==1, "R(ZE)", "HR(ZE)"))
+  active[,"hrze"] <- ifelse(active[,"RIF"]==1, ifelse(active[,"INH"]==1, "(ZE)", "H(ZE)"), ifelse(active[,"INH"]==1, "R(ZE)", "HR(ZE)"))
   active[,"mdr"] <- ifelse(active[,"MOXI"]==1, ifelse(active[,"partialmoxi"],"MDR, FQ-low", "MDR, FQ-R"), "MDR, FQ-S")
   active[,"bpamz4"] <- active[,"bpamz6"] <- paste0(ifelse(active[,"BDQ"]==1, "", "B"),ifelse(active[,"PA"]==1, "", "Pa"), 
                                                    ifelse(active[,"MOXI"]==1, ifelse(active[,"partialmoxi"]==1, "m", ""), "M"), 
@@ -302,7 +302,7 @@ make.recurrence.matrix <- function()
   recurrencematrix["MDR, FQ-R",] <- wallis(reversewallis(params["MDR_failrelapse_FQ-R"]*1/(1+params["Failures_per_recurrence"]),6,params=params), months = monthsmodeled/3, params = params)
   recurrencematrix["BPa",] <- recurrencematrix["BZ",] <- recurrencematrix["PaZ",] <- recurrencematrix["BM",] <- recurrencematrix["PaM",] <- recurrencematrix["MZ",] <- recurrencematrix["R(ZE)",] 
   
-  recurrencematrix["(ZE)",] <- recurrencematrix["B",] <- recurrencematrix["Pa",] <- recurrencematrix["M",] <- recurrencematrix["Z",] <- 
+  recurrencematrix["H(ZE)",] <- recurrencematrix["(ZE)",] <- recurrencematrix["B",] <- recurrencematrix["Pa",] <- recurrencematrix["M",] <- recurrencematrix["Z",] <- 
     c(wallis(cxconv = reversewallis(recurrence = params["Highrecurrence"],months = 6,params = params),months = monthsmodeled,params = params)[1:6], rep(params["Highrecurrence"], length(monthsmodeled)-6))
   
   recurrencematrix["BPaL",] <- recurrencematrix["HR(ZE)",]
@@ -327,7 +327,7 @@ make.recurrence.matrix <- function()
 
 make.adr.matrix <- function()
 {
-  adrmatrix <- array(NA, dim=c(length(activeregimens), 4)); dimnames(adrmatrix) <- list(activeregimens, c("RR", "FQR", "BR", "PaR"))
+  adrmatrix <- array(NA, dim=c(length(activeregimens), 4)); dimnames(adrmatrix) <- list(activeregimens, c("HR", "RR", "FQR", "BR", "PaR"))
   adrmatrix[,"RR"] <- c(params["adr_r"]*c(1, params["adrfactor_other"]), rep(0, length(activeregimens)-2))
   adrmatrix["MDR, FQ-S","FQR"] <- adrmatrix["MDR, FQ-low","FQR"] <- params["adr_mdr"]
   adrmatrix["BPaMZ","FQR"] <- adrmatrix["BPamZ","FQR"] <- params["adr_bpamz"]
@@ -342,7 +342,7 @@ make.adr.matrix <- function()
   adrmatrix[c("BPaMZ", "BPaM", "BPaZ", "PaMZ", "BPa", "PaZ", "PaM", "BPaL", "PaL"),"PaR"] <- 
     params["adr_bpamz"]*c(1, params["adrfactor_z"], params["adrfactor_other"], params["adrfactor_other"], params["adrfactor_other"]*params["adrfactor_z"], 
                           params["adrfactor_twodrugs"], params["adrfactor_other"]*params["adrfactor_z"], 1, params["adrfactor_other"])
-  adrmatrix["B", "BR"] <- adrmatrix["Pa", "PaR"] <- params["Highrecurrence"]*(1+params[ "Failures_per_recurrence"])/(1+params["Highrecurrence"]*params[ "Failures_per_recurrence"])
+  adrmatrix["H(ZE)","HR"] <- adrmatrix["B", "BR"] <- adrmatrix["Pa", "PaR"] <- params["Highrecurrence"]*(1+params[ "Failures_per_recurrence"])/(1+params["Highrecurrence"]*params[ "Failures_per_recurrence"])
   adrmatrix[c("BPamZ", "BPam", "BmZ", "Bm"),"BR"] <- 
     params["adrfactor_partialmoxi"]*adrmatrix[c("BPaZ", "BPa", "BZ", "B"),"BR"] 
   adrmatrix[c("BPamZ", "BPam", "PamZ", "Pam"),"PaR"] <- 
@@ -520,8 +520,7 @@ treatmentend <- function(last, params, N, eventtypes, statetypes, regimentypes)
   return(current)
 }
 
-## EVENT 4 = RELAPSES, and carry others forward if they're not dead ## 
-# Allow relapses to occur
+## EVENT 4 = RELAPSES (vs other mortality while pending relapse), and carry others forward if they're not dead ## 
 relapseevent <-  function(last, params, N, eventtypes, statetypes, regimentypes)
 {
   current <- last
@@ -546,7 +545,7 @@ relapseevent <-  function(last, params, N, eventtypes, statetypes, regimentypes)
 
 # add mortality during intervals without TB
 #(already included above for those pending relapse, and for those with TB)
-addnaturalmortality <- function(last, params, N, eventtypes, statetypes, maxtime)
+addnaturalmortality <- function(last, params, N, eventtypes, statetypes, maxtime=1000*12)
 {
   current <- last
   
@@ -591,7 +590,7 @@ require(abind)
 require(rlist)
 require(prodlim)
 
-modelcourse <- function(scenario="0", cohort, params, reps=1, steplimit=20, stochasticmode=TRUE) # will need to repeat same for each rep of a given patient, if probabilistic events
+modelcourse <- function(scenario="0", cohort, params, reps=1, steplimit=16, stochasticmode=TRUE) # will need to repeat same for each rep of a given patient, if probabilistic events
 {
   repcohort <- do.call(rbind, replicate(reps, cohort, simplify=FALSE))
   intervention <- set.scenario(scenario)
@@ -631,7 +630,8 @@ modelcourse <- function(scenario="0", cohort, params, reps=1, steplimit=20, stoc
     course <- abind(course, relapseevent(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
   }
     
-  course <- abind(course, addnaturalmortality(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, maxtime = max(course[,"eventtime",])), along=3)
+  # course <- abind(course, addnaturalmortality(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, maxtime = max(course[,"eventtime",])), along=3)
+  course <- abind(course, addnaturalmortality(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes), along=3)
   
   newcourse <- array(course, dim=c(dim(course)[1]/reps,reps,dim(course)[2:3]))
   newcourse <- aperm(newcourse, c(1,3,4,2))

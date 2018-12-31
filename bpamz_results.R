@@ -1,3 +1,12 @@
+date <- "20181229"
+
+load(paste0("cohort.",date,".Rdata"))
+impact <- readRDS(file = paste0("impact.",date,".RDS"))
+impact <- lapply(impact, function(x) x[])
+dst <- readRDS(file = paste0("dst.",date,".RDS"))
+delays <- readRDS(file = paste0("delays.",date,".RDS"))
+                                    
+
 # can look at this equally-weighted "cohort":
 lapply(impact, FUN = function(x) summary(apply(x, 4, function(y) mean(y[,"TBstate",20]==7)))) 
 lapply(impact, FUN = function(x) summary(apply(x, 4, function(y) mean(y[,"TBstate",4]==1)))) 
@@ -271,80 +280,99 @@ time.in.state <- function(patiententry, states=8, characteristics=c(), character
   return(c(t, patiententry["TBstate",ncol(patiententry)]))
 }
 
-# tally up time alive: # need to cut all scenarios off at the same point, say 3 years:
-l <- loutcomeboot(individualoutcomefunction =time.in.state, states=5:6, cutofftime=5*12, carryforward=T, 
-                  simoutput=impact, c=c, include=(c$RIF==1), copies = 3, desiredsize = 1e4)
-lapply(l, function(x) apply(x[,1,],2,mean))
-# why is survival staying same or going down with novelrr for RIF==1?? (same for MXOI==0) need to recheck with larger iniital sim **
+# tally up time alive: # need to cut all scenarios off at the same point, say 3 years - no, need a longer time window, see below:
+followyears <- 20
+l <- loutcomeboot(individualoutcomefunction =time.in.state, states=1:7, cutofftime=12*followyears, carryforward=T, 
+                  simoutput=impact, c=c, include=(c$RIF==1), copies = 3, desiredsize = 1e5)
+lapply(l, function(x) apply(x[,1,],2,summary))
+# why is survival staying same or going down with novelrr for RIF==1 and cutofftime=36?? (same for MXOI==0) need to recheck with larger iniital sim **
+## one possibility: I model low mortality during treatment, so longer treatment courses allow less opportunity for TB death. Esp with a cutoff at 3 years, there's no opportunity for death after unsuccessful conventional MDR-TB treament, but some do die of TB in the period after novel RR TB treatement (even though ultimately their risk is lower)
+# but I'm seeing this to some extent even for very long cutofftimes -- novelrr doesn't reduce mortality. maybe bc most get hrze, so most mortality is before mdr treament starts, and of those who get to mdr treatment, there's still the efect that longer regimen defers relapse/failure mortality
 # for MOXI==1, the lack of benefit of pantb is expected. 
+#(there was also a problem with remaining diagnosed at the last step, which I've hopefuly fixed 12/30)
+# for RIF==0 at baseline, there's a slight mortality increase with novel RR in 20181218 -- just chance? **
 
 # incremental months of life per patient: 
-unlist(lapply(c,function(x) summary(x["Mean",]-mean(c$baseline["Mean",])))); unlist(lapply(c,function(x) sd(x["Mean",])))
+lapply(l, function(x) apply(x[,1,] - l$baseline[,1,],2,mean))
 # plot years of life gained within first [3] years:
 par(mfrow=c(1,1), mar=c(4,4,3,1), oma=c(1,1,1,1))
-boxplot( lapply(c[2:6],function(x) x["Mean",] - mean(c$baseline["Mean",])), main="Incremental months of life gained per patient,\nover 3 years after TB onset", col=colors[2:6])
-
+boxplot( lapply(l, function(x) apply(x[,1,] - l$baseline[,1,],2,mean)), main=paste0("Incremental months of life gained per patient,\nover ",followyears," years after TB onset"))
 
 # time on treatment (of some kind)
-(c <- lapply(outcomes, function(y) apply(y, 4, function(x) time.in.state(states = c("treating", "treating_adr"), course = x, cutofftime = 3*12, carryforward = T)) ))
-# median and IQR:
-rbind(unlist(lapply(c,function(x) mean(x["1st Qu.",]))), unlist(lapply(c,function(x) mean(x["Median",]))), unlist(lapply(c,function(x) mean(x["3rd Qu.",]))))
-unlist(lapply(c,function(x) mean(x["Mean",]))); unlist(lapply(c,function(x) sd(x["Mean",])))
-boxplot(lapply(c,function(x) x["Mean",]), main="Average time on treatment (months)", col=colors, ylim=c(0,6))
+l <- loutcomeboot(individualoutcomefunction =time.in.state, states=c(statetypes$treating, statetypes$treating_adr), cutofftime=12*followyears, carryforward=T, 
+                  simoutput=impact, c=c, include=(c$RIF==1), copies = 3, desiredsize = 1e5)
+lapply(l, function(x) apply(x[,1,],2,summary))
+boxplot(lapply(l, function(x) x[,1,1]), main="Total time on treatment per RIF-R patient", col=colors, ylim=c(0,20), ylab="months")
+boxplot(lapply(l, function(x) apply(x[,1,], 2, mean)), main="Average time on treatment for RIF-R patients", col=colors, ylim=c(0,20), ylab="months")
 
-# time deceased (compare to time alive, should see inverse - not exact but pretty close)
-(c <- lapply(outcomes, function(y) apply(y, 4, function(x) time.in.state(states = c("deceased"), course = x, cutofftime = 3*12, carryforward = T)) ))
-unlist(lapply(c,function(x) mean(x["Mean",]))); unlist(lapply(c,function(x) sd(x["Mean",])))
-unlist(lapply(c,function(x) mean(c$baseline["Mean",] - x["Mean",]))); unlist(lapply(c,function(x) sd(x["Mean",])))
+# time deceased i.e. YLL (compare to time alive, should see inverse)
+l <- loutcomeboot(individualoutcomefunction =time.in.state, states=8, cutofftime=12*followyears, carryforward=T, 
+                  simoutput=impact, c=c, include=(c$RIF==1), copies = 3, desiredsize = 1e5)
+lapply(l, function(x) apply(x[,1,],2,mean))
 
 
-# cures, as opposed to death or still on treatment after 2 rounds:
-lapply(outcomes, function(x) summary(apply(x[,"TBstate",10,]==statetypes$cured, 2, mean)))
-boxplot(lapply(outcomes, function(x) apply(x[,"TBstate",10,]==statetypes$cured, 2, mean)), main="Proportion cured within two rounds of treatment", col=colors)
-
-# cures, as opposed to death or still on treatment at xx years:
+# cures, as opposed to death or still on treatment at xx months:
 t <- 36; 
-lapply(lapply(outcomes, function(y) apply(y, 4, function(x) mean((x[, "TBstate",][cbind(1:nrow(cohort), apply(x[,"eventtime",], 1, function(z) ifelse(max(z)>t, which.max(z>t)-1, length(z)) ))])==statetypes$cured))), summary)
-boxplot(lapply(outcomes, function(y) apply(y, 4, function(x) mean((x[, "TBstate",][cbind(1:nrow(cohort), apply(x[,"eventtime",], 1, function(z) ifelse(max(z)>t, which.max(z>t)-1, length(z)) ))])==statetypes$cured))), 
-        main=paste0("Proportion with cure (vs ongoing TB or death) ",t/12," years after TB onset"), col=colors)
-# something's wrong here, lower than counting cures at a relatively early time point (2 rounds of treatment)
+still.in.state <- function(patiententry, states=8, time=36)
+{
+  # look at last entry with time < time, is it in states?
+  maxed <- (max(patiententry["eventtime",])>t)
+  return(c(
+  patiententry["TBstate", ifelse(maxed, which.max(patiententry["eventtime",]>t)-1, length(patiententry["eventtime",]))] %in% states,
+  maxed))
+}
+l <- loutcomeboot(individualoutcomefunction =still.in.state, states=7, time=t, 
+                  simoutput=impact, c=c, include=(c$RIF==1), copies = 3, desiredsize = 1e5)
+boxplot(lapply(l, function(x) apply(x[,1,], 2, mean)), main=paste0("Proportion with cure (vs ongoing TB or death) ",t/12," years after TB onset"), col=colors, ylim=c(0,1))
 
 
-# deaths within 3 years of TB onset:
-boxplot(lapply(outcomes, function(y) apply(y, 4, function(x) sum(x[,"eventtype",]==eventtypes$death & x[,"eventtime",]<36)/(N))), main=c("Mortality within three years of TB onset, proportion of cohort"), col=colors)
+# deaths within 5 years of TB onset:
+t <- 120
+l <- loutcomeboot(individualoutcomefunction =still.in.state, states=8, time=t, 
+                  simoutput=impact, c=c, include=(c$RIF==1&c$RxHist==0), copies = 3, desiredsize = 1e5)
+boxplot(lapply(l, function(x) apply(x[,1,], 2, mean)), main=paste0("Mortality within ",t/12," years of TB onset, proportion of cohort"), col=colors, ylim=c(0,1))
+## ** need to figure out why no mortality benefit for novelRR (here, RxHist and RIF do worse, and for new RIF there's no difference)
+## are outcomes wrong? make.recurrence.matrix()[c("MDR, FQ-S", "MDR, FQ-R", "(ZE)","BPaMZ", "BPaM", "BPaZ"),c("6","18")] looks okay
+## we saw above that we don't reduce YLL either.
+## don't expect to reduce time to RR diagnosis (which in many cases will be long, with one or more (ZE) treatments first and taking 2 yrs or more),
+## and once diagnosed as RR, expect TB mortality risk among ~10% after 18 months, vs among ~3% after 6 months --> 3% + 10%*3% over ~24 months,
+## so by 24 months we should be seeing novelrr mortality benefit.
 
+chisq.test(
+  
+  rbind(c(
+table(impact$baseline[(1:50)[c$RIF==1],"TBstate",7,])
+),c(
+table(impact$novelrr[(1:50)[c$RIF==1],"TBstate",7,])
+))
 
+)
+unlist(statetypes)
 
 # time to cure, if cured (where cure is assumed to happen when treatment stops):
 par(mar=c(3,3,3,1))
-boxplot(lapply(outcomes, function(x) apply(x, 4, function(y) mean(
-  y[, "eventtime",][cbind(1:nrow(cohort), apply(y[,"TBstate",], 1, function(x) ifelse(mean(x==statetypes$cured)>0, which.max(x==statetypes$cured), NA)))], na.rm=T)
-)), main="Average time (in months) from TB onset to\nsuccessful treatment completion, for those ultimately cured")
-# bpamz4 and fullnovel are faster than the others
+time.and.courses.to.cure <- function(patiententry) # also include number of treatment courses
+{  c(
+  ifelse(patiententry["TBstate",ncol(patiententry)]==statetypes$cured, patiententry["eventtime",which.max(patiententry["TBstate",]==statetypes$cured)], NA),
+  sum(patiententry["eventtype",]==eventtypes$treatmentstart)  
+  )
+}
+l <-  loutcomeboot(individualoutcomefunction =time.and.courses.to.cure, 
+                   simoutput=impact, c=c, include=(c$RIF==1), copies = 3, desiredsize = 1e5)
+lapply(l, function(x) apply(x[,1,],2,summary))
+boxplot(lapply(l, function(x) x[,1,1]), main="Time (in months) from TB onset to\nsuccessful treatment completion, for those ultimately cured,\nRR-TB patients only")
+l <-  loutcomeboot(individualoutcomefunction =time.and.courses.to.cure, 
+                   simoutput=impact, c=c, include=(c$RIF==0), copies = 3, desiredsize = 1e5)
+boxplot(lapply(l, function(x) x[,1,1]), main="Time (in months) from TB onset to\nsuccessful treatment completion, for those ultimately cured,\nRS-TB patients only")
 
-
-# time in infectious states (excluding on-treatment)
-lapply(outcomes, function(x) apply(x, 4, function(y) time.in.state(c("undiagnosed"), y))) # not much difference, somewhat longer for baseline
-lapply(outcomes, function(y) time.in.state(c("diagnosed"), y)) #none with parameters set to zero
-lapply(outcomes, function(y) time.in.state(c("failed"), y)) # median and 3rd quartile zero here, but means much different
-
-# # cutting off tails to reduce effects of outliers: 
-# limits <- 1:10
-# lapply(outcomes, function(y) time.in.state(c("undiagnosed"), y[,,limits]))
-# lapply(outcomes, function(y) time.in.state(c("diagnosed"), y[,,limits]))
-# lapply(outcomes, function(y) time.in.state(c("failed"), y[,,limits]))
 
 # total infectious time:
-# (l <- lapply(outcomes, function(x) apply(x, 4, function(y) time.in.state(c("undiagnosed", "diagnosed", "failed"), y))))
-# boxplot(lapply(l, function(y) y["Mean",]), main="Average infectious time (in months)")
-# using a cutoff time to avoid bias:
-summary(outcomes$bpamz4[,"eventtime",dim(outcomes$bpamz4)[3],])
-(l <- lapply(outcomes, function(x) apply(x, 4, function(y) time.in.state(c("undiagnosed", "diagnosed", "failed"), y, cutofftime = 4*12))))
-boxplot(lapply(l, function(y) y["Mean",]), main="Average infectious time (in months)", col=colors)
+l <- loutcomeboot(individualoutcomefunction =time.in.state, states=1:6, cutofftime=12*5, carryforward=T, 
+                  simoutput=impact, c=c, include=(c$RIF==1), copies = 3, desiredsize = 1e4)
+lapply(l, function(x) apply(x[,1,],2,summary))
+boxplot(lapply(l, function(x) x[,1,1]), main="Infectious time, RR-TB cases")
 
 
-## with a cohort size of 5000 mostly DS, the random variation overwhelms the regimen-related, with the exception that baseline is most and bpamz6 is least as expected.
-## when there's a regimen delay, bpamz4 can perform better than fullnovel here
 
 # estimated reduction in infectious time and force of infection (not accounting for infectiousness during treatment, changes in a person's infectiousness over time, etc): 
 reduction <- lapply(outcomes[2:6], function(x)
