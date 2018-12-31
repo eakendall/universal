@@ -312,7 +312,7 @@ lapply(l, function(x) apply(x[,1,],2,mean))
 
 
 # cures, as opposed to death or still on treatment at xx months:
-t <- 36; 
+t <- 48; 
 still.in.state <- function(patiententry, states=8, time=36)
 {
   # look at last entry with time < time, is it in states?
@@ -337,17 +337,9 @@ boxplot(lapply(l, function(x) apply(x[,1,], 2, mean)), main=paste0("Mortality wi
 ## don't expect to reduce time to RR diagnosis (which in many cases will be long, with one or more (ZE) treatments first and taking 2 yrs or more),
 ## and once diagnosed as RR, expect TB mortality risk among ~10% after 18 months, vs among ~3% after 6 months --> 3% + 10%*3% over ~24 months,
 ## so by 24 months we should be seeing novelrr mortality benefit.
+## it's possible the problem was different maxtimes between the scenarios, since I was setting mortality limit for each internally based on the max time recorded, 
+## meaning longer maxtime and more opportunity for natural mortality in the one with longer time steps -- but that should cause more mortality for baseline. 
 
-chisq.test(
-  
-  rbind(c(
-table(impact$baseline[(1:50)[c$RIF==1],"TBstate",7,])
-),c(
-table(impact$novelrr[(1:50)[c$RIF==1],"TBstate",7,])
-))
-
-)
-unlist(statetypes)
 
 # time to cure, if cured (where cure is assumed to happen when treatment stops):
 par(mar=c(3,3,3,1))
@@ -367,15 +359,28 @@ boxplot(lapply(l, function(x) x[,1,1]), main="Time (in months) from TB onset to\
 
 
 # total infectious time:
-l <- loutcomeboot(individualoutcomefunction =time.in.state, states=1:6, cutofftime=12*5, carryforward=T, 
+l <- loutcomeboot(individualoutcomefunction =time.in.state, states=c(1,2,6), cutofftime=12*10, carryforward=T, 
                   simoutput=impact, c=c, include=(c$RIF==1), copies = 3, desiredsize = 1e4)
 lapply(l, function(x) apply(x[,1,],2,summary))
-boxplot(lapply(l, function(x) x[,1,1]), main="Infectious time, RR-TB cases")
-
+lapply(l, function(x) apply(x[,1,],2,mean)) # about a 10% reduction for a good novelRR regimen with poor coverage, which is what I'd expect?
+# and effect more than tripled by novelrrx because it ~triples the number who get good treatment the first round, vs 2nd or 3rd or beyond
+boxplot(lapply(l, function(x) x[,1,1]), main="Total infectious time, RR-TB cases")
+## also consider by smear status here?? (but note that smear pos at dx doesn't mean always smear pos)
 
 
 # estimated reduction in infectious time and force of infection (not accounting for infectiousness during treatment, changes in a person's infectiousness over time, etc): 
-reduction <- lapply(outcomes[2:6], function(x)
+# RIF-R
+l <- loutcomeboot(individualoutcomefunction =time.in.state, states=c(1,2,6), cutofftime=12*10, carryforward=T, 
+                  simoutput=impact, c=c, include=(c$RIF==1), copies = 3, desiredsize = 1e4)
+lapply(l, function(x) apply((l$baseline[,1,]-x[,1,]), 2, sum)/apply(l$baseline[,1,],2,sum))
+# and consider RIF-S:
+l <- loutcomeboot(individualoutcomefunction =time.in.state, states=c(1,2,6), cutofftime=12*10, carryforward=T, 
+                  simoutput=impact, c=c, include=(c$RIF==0), copies = 3, desiredsize = 1e4)
+lapply(l, function(x) apply((l$baseline[,1,]-x[,1,]), 2, sum)/apply(l$baseline[,1,],2,sum))
+## ** why is novelrr increasing total TB infectious time? acquired resistance getting ****!!
+## let's rerun and check this too
+
+reduction <- lapply(impact, function(x)
   (apply(outcomes$baseline, 4, function(y) (time.in.state(c("undiagnosed", "diagnosed", "failed"), y, cutofftime = 4*12)["Mean"])) - 
      apply(x, 4, function(y) (time.in.state(c("undiagnosed", "diagnosed", "failed"), y, cutofftime = 4*12)["Mean"]))) /
     apply(outcomes$baseline, 4, function(y) time.in.state(c("undiagnosed", "diagnosed", "failed"), y, cutofftime = 4*12)["Mean"]))

@@ -327,7 +327,7 @@ make.recurrence.matrix <- function()
 
 make.adr.matrix <- function()
 {
-  adrmatrix <- array(NA, dim=c(length(activeregimens), 4)); dimnames(adrmatrix) <- list(activeregimens, c("HR", "RR", "FQR", "BR", "PaR"))
+  adrmatrix <- array(NA, dim=c(length(activeregimens), 5)); dimnames(adrmatrix) <- list(activeregimens, c("HR", "RR", "FQR", "BR", "PaR"))
   adrmatrix[,"RR"] <- c(params["adr_r"]*c(1, params["adrfactor_other"]), rep(0, length(activeregimens)-2))
   adrmatrix["MDR, FQ-S","FQR"] <- adrmatrix["MDR, FQ-low","FQR"] <- params["adr_mdr"]
   adrmatrix["BPaMZ","FQR"] <- adrmatrix["BPamZ","FQR"] <- params["adr_bpamz"]

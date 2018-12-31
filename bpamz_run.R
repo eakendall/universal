@@ -1,7 +1,7 @@
 # setwd("C:/Users/ekendal2/OneDrive - Johns Hopkins University/Research/universal regimen/universal")
 source("bpamz_cohort.R")
 
-date <- "20181230"
+date <- "20181231"
 
 cohortsize <- 1e8 
 # 1e7 is barely enough to capture all but the rarest combinations at least once. Really using this to get freqs, and would be easier to just calculate probs rather than creating a cohort but I've already done this so will go with it. Should use 1e8, but that req's >>4gb memory.
