@@ -6,6 +6,8 @@ require(dplyr)
 
 allparams <- read.csv("allparams.csv", header=T, stringsAsFactors = F)
 params <- as.numeric(allparams[,2]); names(params) <- allparams[,1]
+params["Tbdxtime_recurrence"] <- params["Tbdxtime_recurrenceratio"]*params["Tbdxtime"]
+
 params["Regimendelay"] <- 0
 params["Regimenloss"] <- 0
 
@@ -119,9 +121,9 @@ set.scenario <- function(scenario="0")
                            if (scenario=="2b") { regimen_s <- "bpamz6"; regimen_r <- "bpamz6"; xpertxdr <- "none"; allxpert<-FALSE  }  
 
                            # DST focused analyses, universal regimens:
-                           # if (scenario=="3") { regimen_s <- "bpamz4"; regimen_r <- "bpamz6"; xpertxdr <- "none" }  
-                           if (scenario=="4") { regimen_s <- "bpamz4"; regimen_r <- "bpamz6"; xpertxdr <- "stepwise"; allxpert<-FALSE  }  
-                           if (scenario=="5") { regimen_s <- "bpamz4"; regimen_r <- "bpamz6"; xpertxdr <- "simultaneous"; allxpert<-FALSE  }  
+                           if (scenario=="3x") { regimen_s <- "bpamz4"; regimen_r <- "bpamz6"; xpertxdr <- "none" ; allxpert<-TRUE }
+                           if (scenario=="4x") { regimen_s <- "bpamz4"; regimen_r <- "bpamz6"; xpertxdr <- "stepwise"; allxpert<-TRUE  }  
+                           if (scenario=="5x") { regimen_s <- "bpamz4"; regimen_r <- "bpamz6"; xpertxdr <- "simultaneous"; allxpert<-TRUE  }  
                            
                            # # and could consider DST question for MDR only (but too much complexity re baseline DST andconventional XDR regimens):
                            # if (scenario=="1a") { regimen_s <- "hrze"; regimen_r <- "bpamz6"; xpertxdr <- "none" }  
@@ -151,7 +153,7 @@ Xpertdone <- function(scenario, patient, params, stochasticmode=TRUE)
 {
   if (missing(scenario)) scenario <- "0"
   intervention <- set.scenario(scenario)
-  if(intervention$allxpert) params["Xpert_current_new"] <- params["Xpert_current_rerx"] <- 1
+  if(intervention$allxpert) params["Xpert_current_new"] <- params["Xpert_current_rerx"] <- params["Xpert_max"]
   
   N <- nrow(patient)
   
