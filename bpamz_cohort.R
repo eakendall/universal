@@ -65,23 +65,45 @@ make.cohort <- function(params, patientvars, N=10000)
                                                        prob=c(1-params['INH-R_in_RetreatmentRIF-S'], params['INH-R_in_RetreatmentRIF-S']))
   cohort$INH[cohort$RIF==1] <- sample(c(0, 1), size = sum(cohort$RIF==1), replace = T, 
                                       prob=c(1-params['INH-R_in_RIF-R'], params['INH-R_in_RIF-R']))
-# here, MOXI indicates any moxi resistance, and partialmoxi indicates only low-level/partial resistance (and partial activity)
-  cohort$MOXI[cohort$RIF==1] <- sample(c(0, 1), size = sum(cohort$RIF==1), replace = T, 
-                                       prob=c(1-params['MOXI-R-any_in_RIF-R'], params['MOXI-R-any_in_RIF-R']))
-  cohort$partialmoxi[cohort$MOXI==1&cohort$RIF==1] <- sample(c(0, 1), size = sum(cohort$MOXI==1&cohort$RIF==1), replace = T, 
-                                              prob=c(params['MOXI-R-highlevel_in_RIF-R']/params['MOXI-R-any_in_RIF-R'], 
-                                                     1 - params['MOXI-R-highlevel_in_RIF-R']/params['MOXI-R-any_in_RIF-R']))
-  cohort$MOXI[cohort$RIF==0] <- sample(c(0, 1), size = sum(cohort$RIF==0), replace = T, 
-                                       prob=c(1-params['MOXI-R-any_in_RIF-S'], params['MOXI-R-any_in_RIF-S']))
+
+# if modeling PZA-moxi correlation, will correlate only with MOXI (ignore partialmoxi). 
+# Within each RR stratum, I'll have a proportion m of Moxi R vs S, and an overall proportion z of PZA-R I need to assign among the rr
+# If I assign proportion a (oro the RR or RS) to be both z and m resistant, then OR = a(1-z-m+a)/(m-a)(z-a), and solving a quadratic for a:
+  imputecombo <- function(OR, z, m)
+  { C1 <- (OR-1); C2 <- (z+m-OR*z-OR*m-1); C3 <- OR*m*z
+    a2 = (-C2 - sqrt(C2^2 - 4*C1*C3))/(2*C1)
+    if (0 <= a2 & a2 <= 1)
+      return(c(a2, z-a2, m-a2, 1-z-m+a2)) # z and m, then z not m, then m not z, then neither
+    else (return(NA))
+  }
+  
+  cohort$PZA <- cohort$MOXI <- NA
+  cohort[cohort$RIF==1,c("PZA", "MOXI")] <- array(c(1,1,0,0,1,0,1,0), dim=c(4,2))[sample(1:4, size=sum(cohort$RIF==1), replace=T,
+                                                                            prob=imputecombo(OR=params["OR-PZA-if_MOXI"], z=params['PZA-R_in_RIF-R'], m=params['MOXI-R-any_in_RIF-R']))
+                                                                            ,]
+  cohort[cohort$RIF==0,c("PZA", "MOXI")] <- array(c(1,1,0,0,1,0,1,0), dim=c(4,2))[sample(1:4, size=sum(cohort$RIF==0), replace=T,
+                                                                                         prob=imputecombo(OR=params["OR-PZA-if_MOXI"], z=params['PZA-R_in_RIF-S'], m=params['MOXI-R-any_in_RIF-S']))
+                                                                                  ,]
+
+    cohort$partialmoxi[cohort$MOXI==1&cohort$RIF==1] <- sample(c(0, 1), size = sum(cohort$MOXI==1&cohort$RIF==1), replace = T, 
+                                                             prob=c(params['MOXI-R-highlevel_in_RIF-R']/params['MOXI-R-any_in_RIF-R'], 
+                                                                    1 - params['MOXI-R-highlevel_in_RIF-R']/params['MOXI-R-any_in_RIF-R']))
   cohort$partialmoxi[cohort$MOXI==1&cohort$RIF==0] <- sample(c(0, 1), size = sum(cohort$MOXI==1&cohort$RIF==0), replace = T, 
                                                              prob=c(params['MOXI-R-highlevel_in_RIF-S']/params['MOXI-R-any_in_RIF-S'], 
                                                                     1 - params['MOXI-R-highlevel_in_RIF-S']/params['MOXI-R-any_in_RIF-S']))
   cohort$partialmoxi[cohort$MOXI==0] <- 0
-  cohort$PZA[cohort$RIF==1] <- sample(c(0, 1), size = sum(cohort$RIF==1), replace = T, 
-                                      prob=c(1-params['PZA-R_in_RIF-R'], params['PZA-R_in_RIF-R']))
-  cohort$PZA[cohort$RIF==0] <- sample(c(0, 1), size = sum(cohort$RIF==0), replace = T, 
-                                      prob=c(1-params['PZA-R_in_RIF-S'], params['PZA-R_in_RIF-S']))
-  cohort$BDQ <- sample(c(0, 1), size = nrow(cohort), replace = T, 
+  
+  # # here, MOXI indicates any moxi resistance, and partialmoxi indicates only low-level/partial resistance (and partial activity)
+  # cohort$MOXI[cohort$RIF==1] <- sample(c(0, 1), size = sum(cohort$RIF==1), replace = T, 
+  #                                      prob=c(1-params['MOXI-R-any_in_RIF-R'], params['MOXI-R-any_in_RIF-R']))
+  # cohort$MOXI[cohort$RIF==0] <- sample(c(0, 1), size = sum(cohort$RIF==0), replace = T, 
+  #                                      prob=c(1-params['MOXI-R-any_in_RIF-S'], params['MOXI-R-any_in_RIF-S']))
+  # cohort$PZA[cohort$RIF==1& cohort$MOXI==1] <- sample(c(0, 1), size = sum(cohort$RIF==1), replace = T, 
+  #                                     prob=c(1-params['PZA-R_in_RIF-R'], params['PZA-R_in_RIF-R']))
+  # cohort$PZA[cohort$RIF==0] <- sample(c(0, 1), size = sum(cohort$RIF==0), replace = T, 
+  #                                     prob=c(1-params['PZA-R_in_RIF-S'], params['PZA-R_in_RIF-S']))
+
+  cohort$BDQ <- sample(c(0, 1), size = nrow(cohort), replace = T,
                        prob=c(1-params['BDQ-R_in_All'], params['BDQ-R_in_All']))
   cohort$PA <- sample(c(0, 1), size = nrow(cohort), replace = T, 
                       prob=c(1-params['PA-R_in_All'], params['PA-R_in_All']))
@@ -302,9 +324,10 @@ make.recurrence.matrix <- function()
   recurrencematrix["BMZ",] <- recurrencematrix["PaMZ",] <- recurrencematrix["BPaZ",]
   recurrencematrix["MDR, FQ-S",] <- wallis(reversewallis(params["MDR_failrelapse_FQ-S"]*1/(1+params["Failures_per_recurrence"]),6,params=params), months = monthsmodeled/3, params = params)
   recurrencematrix["MDR, FQ-R",] <- wallis(reversewallis(params["MDR_failrelapse_FQ-R"]*1/(1+params["Failures_per_recurrence"]),6,params=params), months = monthsmodeled/3, params = params)
+  recurrencematrix["H(ZE)",] <- wallis(reversewallis(params["INHmono_failrelapse"]*1/(1+params["Failures_per_recurrence"]),6,params=params), months = monthsmodeled/1.5, params = params)
   recurrencematrix["BPa",] <- recurrencematrix["BZ",] <- recurrencematrix["PaZ",] <- recurrencematrix["BM",] <- recurrencematrix["PaM",] <- recurrencematrix["MZ",] <- recurrencematrix["R(ZE)",] 
   
-  recurrencematrix["H(ZE)",] <- recurrencematrix["(ZE)",] <- recurrencematrix["B",] <- recurrencematrix["Pa",] <- recurrencematrix["M",] <- recurrencematrix["Z",] <- 
+  recurrencematrix["(ZE)",] <- recurrencematrix["B",] <- recurrencematrix["Pa",] <- recurrencematrix["M",] <- recurrencematrix["Z",] <- 
     c(wallis(cxconv = reversewallis(recurrence = params["Highrecurrence"],months = 6,params = params),months = monthsmodeled,params = params)[1:6], rep(params["Highrecurrence"], length(monthsmodeled)-6))
   
   recurrencematrix["BPaL",] <- recurrencematrix["HR(ZE)",]
