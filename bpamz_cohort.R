@@ -5,7 +5,9 @@ require(arm)
 require(dplyr)
 
 allparams <- read.csv("allparams.csv", header=T, stringsAsFactors = F)
-params <- as.numeric(allparams[,2]); names(params) <- allparams[,1]
+if(setting=="SEA") params <- as.numeric(allparams[,2])
+if(setting=="SAf") params <- as.numeric(allparams[,5])
+names(params) <- allparams[,1]
 params["Tbdxtime_recurrence"] <- params["Tbdxtime_recurrenceratio"]*params["Tbdxtime"]
 
 params["Regimendelay"] <- 0
@@ -34,7 +36,7 @@ monthsmodeled <- c(1:6, 9, 12, 18)
 eventtypes <- list(TBonset=1, TBdiagnosis=2, treatmentstart=3, treatmentend=4, death=5, pretreatmentltfu=6, carryforward=7)
 # diagnosis will incorporate DST and regimen selection), treatment start will incorporate ADR, 
 # For each event, track RxHist, NovelHist, current susceptibilities, TB state.
-statetypes <- list(undiagnosed=1, diagnosed=2, treating=3, treating_adr=4, failed=5, pendingrelapse=6, cured=7, deceased=8)
+statetypes <- list(undiagnosed=1, diagnosed=2, treating=3, treating_adr=4, failed=5, pendingrelapse=6, cured=7, deceased=8, relapsed=9)
 regimentypes <- as.list(1:length(regimens)); names(regimentypes) <- regimens; regimentypes$none <- 0
 
 
@@ -387,7 +389,7 @@ diagnosisevent <- function(last, params, N, eventtypes, statetypes, regimentypes
   current <- last
   
   # ** could later change the diagnosis time distribution (and same for mortallity etc?) to something less skewed
-  needdiagnosis <- ((last[,"TBstate"]==statetypes$undiagnosed)|(last[,"TBstate"]==statetypes$failed))
+  needdiagnosis <- ((last[,"TBstate"]==statetypes$undiagnosed)|(last[,"TBstate"]==statetypes$failed)| (last[,"TBstate"]==statetypes$relapsed))
   dxtime <- rexp(N, 1/(last[,"RxHist"]*params["Tbdxtime_recurrence"] + (1-last[,"RxHist"])*params["Tbdxtime"]))
   
   # check for mortality before initial TB diagnosis event:
@@ -561,7 +563,7 @@ relapseevent <-  function(last, params, N, eventtypes, statetypes, regimentypes)
   
   current[relapsers&(!deaths), "eventtime"] <- last[relapsers&(!deaths), "eventtime"] + relapsetime[relapsers&(!deaths)]; 
   current[relapsers&(!deaths), "eventtype"] <- eventtypes$TBonset
-  current[relapsers&(!deaths), "TBstate"] <- statetypes$undiagnosed
+  current[relapsers&(!deaths), "TBstate"] <- statetypes$relapsed
   
   current[!relapsers,"eventtype"] <- eventtypes$carryforward
   

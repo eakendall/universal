@@ -1,203 +1,114 @@
-date <- "20181231"
+date <- "20190109"
+setting <- "SEA"
 source("bpamz_cohort.R")
-require(reshape2); require(ggplot2)
+source("bpamz_result_utils.R")
 
-require(parallel)
-no_cores <- detectCores()
-
-# load(paste0("cohort.",date,".Rdata"))
-impact <- readRDS(file = paste0("impact.",date,".RDS"))
+load(file = paste0("impact.",date,".Rdata"))
 c <- data.frame(impact$baseline[,,1,1])
 # dst <- readRDS(file = paste0("dst.",date,".RDS"))
 
-bootsample <- function(c, include, desiredsize, course_outcomes) 
-{
-  bootindex <- sample((1:nrow(c))[include], desiredsize, replace=T, prob=c$Freq[include]/sum(c$Freq[include]))
-  randindex <-  sample(1:dim(course_outcomes)[[3]], size = desiredsize, replace=T)
-  return(sapply(X = 1:dim(course_outcomes)[[1]], function(x) course_outcomes[cbind(x, bootindex, randindex)]))
-}
-#...which then feeds into
-outcomeboot <- function(individualoutcomefunction, course, c, include=rep(1, dim(course)[[1]]), copies=10, desiredsize=1e4)
-{
-  course_outcomes <- apply(X=course, FUN=individualoutcomefunction, MARGIN = c(1,4))
-  return(replicate( copies, bootsample(c, include, desiredsize, course_outcomes)))
-}
-# or for a list of courses for different scenarios
-loutcomeboot <- function(individualoutcomefunction, simoutput, c, 
-                         include=rep(1, nrow(c)), copies=10, desiredsize=1e4, course_outcomes=NA, 
-                         oncluster=F, ...) 
-{
-  freqweights <- c$Freq # simoutput[[1]][,"Freq",1,1]
-  if(oncluster) 
-    {
-    cores <- detectCores()
-    clust <- makeCluster(cores)
-    l <- parLapply(clust, simoutput, function(y) {  
-      if(is.na(course_outcomes)) course_outcomes <- apply(X=y, FUN=individualoutcomefunction, MARGIN = c(1,4), ...)
-      return(replicate( copies, bootsample(c, include, desiredsize, course_outcomes)))
-      } )
-    }
-        else 
-    {
-      l <- lapply(simoutput, function(y) {  
-        if(is.na(course_outcomes)) course_outcomes <- apply(X=y, FUN=individualoutcomefunction, MARGIN = c(1,4), ...)
-        return(replicate( copies, bootsample(c, include, desiredsize, course_outcomes)))
-      } )
-    }
-  return(l)
-}
-step4status <- function(patiententry) {patiententry[c("TBstate", "eventtime"),4] } 
-step8status <- function(patiententry) {patiententry[c("TBstate", "eventtime"),8] }
-step4812cure <- function(patiententry) {patiententry[c("TBstate"),c(4, 8, 12)]=="7" } 
-
-# redefining from cohort file, for single-patient course:
-# but note that need to keep characteristics here, and call this function with an include of all pts at risk for the characteristic, not just those who have it at baseline (e.g. when talking about adr)
-# will return time in states of interest, and final tbstate
-time.in.state <- function(patiententry, states=8, characteristics=c(), characteristicvals=1, cutofftime=100*12, carryforward=F)
-{
-  elapsedtimes <- patiententry["eventtime",2:ncol(patiententry)] - patiententry["eventtime",1:((ncol(patiententry))-1)] 
-  elapsedtimes[patiententry["eventtime",2:ncol(patiententry)]>cutofftime] <- cutofftime - (patiententry["eventtime",1:(ncol(patiententry)-1)])[patiententry["eventtime",2:(ncol(patiententry))]>cutofftime]
-  elapsedtimes[elapsedtimes<0] <- 0
-  indices <-  patiententry["TBstate",1:(ncol(patiententry)-1)] %in% states
-  if(length(characteristics)==1) indices <- (indices & patiententry[characteristics,1:(ncol(patiententry)-1)]==characteristicvals)
-  if(length(characteristics)>1) indices <- indices & apply(patiententry[characteristics,1:(ncol(patiententry)-1)]==characteristicvals, 2, all)
-  t <- sum(elapsedtimes*indices)
-  if (carryforward) 
-    if (patiententry["TBstate",ncol(patiententry)] %in% states)
-      t <- t + max(0, cutofftime-patiententry["eventtime",ncol(patiententry)])
-  return(c(t, patiententry["TBstate",ncol(patiententry)]))
-}
-
-still.in.state <- function(patiententry, states=8, time=36)
-{
-  # look at last entry with time < time, is it in states?
-  maxed <- (max(patiententry["eventtime",])>t)
-  return(c(
-    patiententry["TBstate", ifelse(maxed, which.max(patiententry["eventtime",]>t)-1, length(patiententry["eventtime",]))] %in% states,
-    maxed))
-}
-time.and.courses.to.cure <- function(patiententry) # also include number of treatment courses
-{  c(
-  ifelse(patiententry["TBstate",ncol(patiententry)]==statetypes$cured, patiententry["eventtime",which.max(patiententry["TBstate",]==statetypes$cured)], NA),
-  sum(patiententry["eventtype",]==eventtypes$treatmentstart)  
-)
-}
-
-
-require(RColorBrewer)
-colors <- palette(brewer.pal(length(statetypes), name = "Set2"))
-
-
-                                    
-# 
-# # can look at this equally-weighted "cohort":
-# lapply(impact, FUN = function(x) summary(apply(x, 4, function(y) mean(y[,"TBstate",16]==7)))) 
-# lapply(impact, FUN = function(x) summary(apply(x, 4, function(y) mean(y[,"TBstate",4]==1)))) 
-# # and particular subsets
-# lapply(impact, FUN = function(x) summary(apply(x[c$RIF==1,,,], 4, function(y) mean(y[,"TBstate",10]==7)))) #RR
-# lapply(impact, FUN = function(x) summary(apply(x[c$MOXI==0,,,], 4, function(y) mean(y[,"TBstate",10]==7)))) 
-# 
-# #** Possible To do: add worse HRZE outcomes for PZA-R. Would need to differentiate the active regimens for (ZE) to +-Z(E)
-# 
-# 
-# # example:  proportion diagnosed by step two:
-# fun <- function(patiententry) { return(c(patiententry["TBstate",2]==2, NA))}
-# l <- loutcomeboot(individualoutcomefunction = fun, simoutput = impact, c = c, include=include, copies=50, desiredsize=1e5)
-# lapply(l, function(x) summary(apply(x[,1,], 2, mean)))
-# #very consistent across copies, but slight differences between scenarios (not consistent between runs of original simulation), suggesting need for reps>1000
-# 
-# ####
-# # plot states over time? this is by model step rather than time
-# par(mfrow=c(2,2))
-# lapply(impact, function(y) barplot(array(unlist(apply(y[,"TBstate",2:20,], 2, tabulate)), dim = c(8,19)), beside=F, col = rainbow(8), legend.text = names(statetypes)))
-# 
-# 
-# # snapshots by time interval: 
-# # plot average states after first treatment attempt, for the equal-wieghted cohort:
-# par(mfrow=c(1,1), oma=c(0,0,1,1))
-# barplot(array(unlist(lapply(impact, FUN = function(x) tabulate(x[,"TBstate",8,]))), dim=c(length(statetypes),length(impact))), names.arg = names(impact), col=colors,
-#         main="Distribution of states after second round of treatment", yaxt='n')
-# legend("right", legend = rev(names(statetypes)), fill=rev(colors), cex=1)
-# 
-# do the same but for the "include"+reweighted subset cohort of interest (here, RIF-R):
-# converting to weighted cohort:
-# and get status after 1 and 2 treatment rounds across the cohort:
-par(mfcol=c(1,2))
-l1 <- loutcomeboot(function(patiententry) {patiententry[c("TBstate", "eventtime"),4] }, impact, c, include=(c$RIF==1), copies=100, desiredsize = 1e5)
-barplot(array(unlist(lapply(l1, FUN = function(x) tabulate(x[,1,]))), dim=c(length(statetypes),length(impact))), names.arg = names(impact), col=colors,
-        main="Status after 1st round of\ntreatment, RR-TB cases", yaxt='n')
-# legend("right", legend = rev(names(statetypes)), fill=rev(colors), cex=1)
-l2 <- loutcomeboot(step8status, impact, c, include=(c$RIF==1), copies=100, desiredsize = 1e4)
-barplot(array(unlist(lapply(l2, FUN = function(x) tabulate(x[,1,]))), dim=c(length(statetypes),length(impact))), names.arg = names(impact), col=colors,
-        main="Status after 2ndround of\ntreatment, RR-TB cases", yaxt='n')
-legend("right", legend = rev(names(statetypes)), fill=rev(colors), cex=1, bg="white")
+# #  average states after 1 and 2 treatment attemptfor the "include"+reweighted subset cohort of interest (here, RIF-R):
+# par(mfcol=c(1,2))
+# l1 <- loutcomeboot(function(patiententry) {patiententry[c("TBstate", "eventtime"),4] }, impact, c, include=(c$RIF==1), copies=100, desiredsize = 1e5)
+# l1b <- loutcomeboot(function(patiententry) {patiententry[c("TBstate", "eventtime"),4] }, impact, c, include=(c$RIF==1), copies=100, desiredsize = 1e5,oncluster = T)
+# barplot(array(unlist(lapply(l1, FUN = function(x) tabulate(x[,1,]))), dim=c(length(statetypes),length(impact))), names.arg = names(impact), col=colors,
+#         main="Status after 1st round of\ntreatment, RR-TB cases", yaxt='n')
+# l2 <- loutcomeboot(step8status, impact, c, include=(c$RIF==1), copies=100, desiredsize = 1e4)
+# barplot(array(unlist(lapply(l2, FUN = function(x) tabulate(x[,1,]))), dim=c(length(statetypes),length(impact))), names.arg = names(impact), col=colors,
+#         main="Status after 2ndround of\ntreatment, RR-TB cases", yaxt='n')
+# legend("right", legend = rev(names(statetypes)), fill=rev(colors), cex=1, bg="white")
 # benefit for novelrrx over novelrr is more than the increase in Xpert coverage, because the new pts whose xpert increases most had longest TBmortality exposure
 # additional benefit of pantB here is those whose TB or RR is missed by Xpert? ~10% for TB and another 5% rif
 
 
-# boxplot proportion cured after 1st and 2nd round:
-par(mfrow=c(1,2), oma=c(0,0,1,1), mar=c(3,3,3,1))
+# #  proportion cured after 1st and 2nd round:
+# par(mfrow=c(1,2), oma=c(0,0,1,1), mar=c(3,3,3,1))
 l4 <- loutcomeboot(step4812cure, impact, c, include=(c$RIF==1), copies=50, desiredsize = 1e5)
-# boxplot(lapply(l4, function(y) apply(y[,1,]- apply(l4$baseline[,1,],2, mean), 2, mean)),
-#         main="Incremental proportion of RIF-R cohort cured after first treatment,\ncompared to baseline average", col=colors[2:6])
-require(reshape2); require(ggplot2)
-l4.m <- lapply(l4, function(x) melt(x, ))
-boxplot(lapply(l4, function(y) apply(y[,1,], 2, mean)), ylim=c(0,1),
-        main="Proportion of RIF-R cohort cured after first treatment", col=colors[2:6])
-boxplot(lapply(l4, function(y) apply(y[,2,], 2, mean)), ylim=c(0,1),
-        main="Proportion of RIF-R cohort cured after second treatment", col=colors[2:6])
+save(l4, file=paste0("l4.",date,".Rdata"))
+lapply(l4, function(y) mean(apply(y[,1,],2, mean))); lapply(l4, function(y) sd(apply(y[,1,],2, mean)))
+l4s <- loutcomeboot(step4812cure, impact, c, include=(c$RIF==0), copies=50, desiredsize = 1e5)
+save(l4s, file=paste0("l4s.",date,".Rdata"))
+lapply(l4s, function(y) mean(apply(y[,1,],2, mean))); lapply(l4s, function(y) sd(apply(y[,1,],2, mean)))
+lapply(l4s, function(y) mean(apply(y[,2,],2, mean)))
+lapply(l4s, function(y) mean((y[,2,])[y[,1,]==0])) # among those not cured first round,cured second?
+lapply(l4s, function(y) mean((y[,3,])[y[,2,]==0])) # among those not cured second round,cured third? (many are dead)
 
-
-
-# 
-# l <- loutcomeboot(function(patiententry) {patiententry["TBstate",] }, impact, c, include=(c$RIF==0), copies=10, desiredsize = 1e4)
-# lapply(l, function(x) apply(x[,2,], 2, tabulate))
-# # I've checked code thoroughly, am confident differences here for timestep 2 are due to chance but indicate need to increase reps in initial simulatio
-# *** to recheck in jan # in 20181231 run, more RS deaths in novelpantb (no diffs for RR). Is this the same in other runs? would indicate problem. 
-
-# can look at step4status for a different subset:
-l3 <- loutcomeboot(step4status, impact, c, include=(c$MOXI==1), copies=5, desiredsize = 1e4)
-#and then tabulate across the cohort and plot as before:
-par(mfrow=c(1,1), oma=c(0,0,1,1))
-barplot(array(unlist(lapply(l3, FUN = function(x) tabulate(x[,1,]))), dim=c(length(statetypes),length(impact))), names.arg = names(impact), col=colors,
-        main="Status after 1st treatment,\nFQ-r patients:\n", yaxt='n')
-legend("right", legend = rev(names(statetypes)), fill=rev(colors), cex=1, bg='white')
-#for Moxi R, Rif S patients, novel regimen looks same or slightly worse
-l31 <- loutcomeboot(step4status, impact, c, include=(c$MOXI==1&c$RIF==0), copies=5, desiredsize = 1e4)
-#and then tabulate across the cohort and plot as before:
-par(mfrow=c(1,1), oma=c(0,0,1,1))
-barplot(array(unlist(lapply(l31, FUN = function(x) tabulate(x[,1,]))), dim=c(length(statetypes),length(impact))), names.arg = names(impact), col=colors,
-        main="Status after 1st treatment,\nFQ-r, RIF-s patients:\n", yaxt='n')
-legend("right", legend = rev(names(statetypes)), fill=rev(colors), cex=1, bg='white')
-
-# showing with and without regimen delays:
-# should look at the same population I'm considering in the main aalysis. Probably all patietns or RIF==1.
-# I initially consider proportion cured in a given round, but total infectious time will be more important
-delays <- readRDS(file = paste0("delays.",date,".RDS"))
-# d <- lapply(loutcomeboot(step4812cure, delays, c, include=(rep(1, length=nrow(c))), copies=50, desiredsize = 1e5), function(y) apply(y[,1,], 2, mean))
-# l <- lapply(loutcomeboot(step4812cure, impact, c, include=(rep(1, length=nrow(c))), copies=50, desiredsize = 1e5), function(y) apply(y[,1,], 2, mean))
-dinf <- loutcomeboot(individualoutcomefunction =time.in.state, states=c(1,2,6), cutofftime=12*10, carryforward=T, 
-                    simoutput=delays, c=c, include=(c$RIF==1), copies = 50, desiredsize = 1e5)
-linf <- loutcomeboot(individualoutcomefunction =time.in.state, states=c(1,2,6), cutofftime=12*10, carryforward=T, 
+# total infectious time:
+li <- loutcomeboot(individualoutcomefunction =time.in.state, states=c(1,2,5,9), cutofftime=12*10, carryforward=T, 
                   simoutput=impact, c=c, include=(c$RIF==1), copies = 50, desiredsize = 1e5)
-di <- lapply(dinf, function(x) apply(x[,1,], 2, mean))
-li <- lapply(linf, function(x) apply(x[,1,], 2, mean))
-str(di)
-ddf <- data.frame(di); ldf <- data.frame(li)
-ddf$params <- "Delay for alternate regimens"
-ldf$params <- "No delays"
-require(dplyr)
-require(data.table)
-m <- bind_rows(ldf, ddf)
-mm <- melt(m, id.vars="params")
-colnames(mm) <- c("Parameters", "Scenario", "Inftime")
-mm$Parameters <- factor(mm$Parameters, levels=c("No delays", "Delay for alternate regimens"))
-require(ggplot2)
-ggplot(data = mm, aes(x=Scenario, y=Inftime)) +
-  geom_boxplot(aes(fill=Parameters)) +
-  ggtitle("Effect of regimen delays") + theme(plot.title = element_text(hjust = 0.5)) +
-  ylab("Average time with untreated active TB (months)") + ylim(0,30)
-# rm(delays)
+save(li, file=paste0("li.",date,".Rdata"))
+liall <- loutcomeboot(individualoutcomefunction =time.in.state, states=c(1,2,5,9), cutofftime=12*10, carryforward=T, 
+                   simoutput=impact, c=c, include=(c$RIF<2), copies = 50, desiredsize = 1e5)
+save(liall, file=paste0("liall.",date,".Rdata"))
+
+lis <- loutcomeboot(individualoutcomefunction =time.in.state, states=c(1,2,5,9), cutofftime=12*10, carryforward=F, 
+                   simoutput=impact, c=c, include=(c$RIF==0), copies = 50, desiredsize = 1e5)
+lipans <- loutcomeboot(individualoutcomefunction =time.in.state, states=c(1,2,5,9), cutofftime=12*3, carryforward=T, 
+                    simoutput=impact, c=c, include=(c$RIF==0&c$PZA==0&c$MOXI==0), copies = 50, desiredsize = 1e5)
+lihr <- loutcomeboot(individualoutcomefunction =time.in.state, states=c(1,2,5,9), cutofftime=12*10, carryforward=F, 
+                       simoutput=impact, c=c, include=(c$RIF==0&c$INH==1), copies = 50, desiredsize = 1e5)
+lapply(lihr, function(x) mean(apply(x[,1,],2,mean)))
+lapply(lihr, function(x) sd(apply(x[,1,],2,mean)))
+# larger novelpantb benefit as it should be, but not sure why int time is increasing (worsening) with novelrr coverage, should do better when rr acquired in second round, andn should otherwise have no effect.
+
+lapply(li, function(x) mean(apply(x[,1,],2,mean))); lapply(li, function(x) sd(apply(x[,1,],2,mean)))
+lapply(liall, function(x) mean(apply(x[,1,],2,mean))); lapply(liall, function(x) sd(apply(x[,1,],2,mean)))
+lapply(lis, function(x) mean(apply(x[,1,],2,mean)))
+lapply(lipans, function(x) mean(apply(x[,1,],2,mean)))
+# issue here, (slightly) higher cure rates each round with novelpantb among rs, but longer infectious time vs baseline or novelrr. 
+# shorter treatment duration means those unsuccessfully treated relapse sooner, therefore contribute moe inf time before a given cutoff.
+# got rid of carryforward (cut off patients who reach the end of data still infecitous), but should also have option to follow for a given number of treatment cycles rather than a time? So among the tail with multiple recurrences, those who recur sooner get followed for less total time. 
+# and why does novelrr affect them at all?  the few who started RR but acquired rif resistant (0.5% of all, 10% of recurrence) will have their poor outcomes cut by >2x, 
+# and if each recurrence results in ~6 infectious months, then reducing average rec time by 6*0.5%*1/2 ~.01 months, not 0.1
+load(file="moreimpact.20190109.Rdata")
+# getting rid of effects of 
+allimpact <- c(impact, moreimpact); rm(moreimpact)
+lipans <- loutcomeboot(individualoutcomefunction =time.in.state, states=c(1,2,5,9), cutofftime=12*4, carryforward=T, 
+                       simoutput=allimpact, c=c, include=(c$RIF==0&c$PZA==0&c$MOXI==0), copies = 50, desiredsize = 1e4)
+lapply(lipans, function(x) mean(apply(x[,1,],2,mean)))
+
+# a recurrence extends infectiousnes sby ~50%, so 0.5% reccurnce with 
+# so overall, so overall should improve by 0.1%
+# and effect more than tripled by novelrrx because it ~triples the number who get good treatment the first round, vs 2nd or 3rd or beyond
+boxplot(lapply(l, function(x) x[,1,1]), main="Total infectious time, RR-TB cases")
+## also consider by smear status here?? (but note that smear pos at dx doesn't mean always smear pos)
+
+# time on treatment (of some kind)
+followyears <- 20
+ltall <- loutcomeboot(individualoutcomefunction =time.in.state, states=c(statetypes$treating, statetypes$treating_adr), cutofftime=12*followyears, carryforward=T, 
+                  simoutput=impact, c=c, include=(c$RIF<2), copies = 50, desiredsize = 1e5)
+save(ltall, file=paste0("ltall.",date,".Rdata"))
+lapply(ltall, function(x) mean(apply(x[,1,],2,mean)))
+lapply(ltall, function(x) sd(apply(x[,1,],2,mean)))
+
+# boxplot(lapply(l, function(x) x[,1,1]), main="Total time on treatment per RIF-R patient", col=colors, ylim=c(0,20), ylab="months")
+# boxplot(lapply(l, function(x) apply(x[,1,], 2, mean)), main="Average time on treatment for RIF-R patients", col=colors, ylim=c(0,20), ylab="months")
+
+
+# # boxplot(lapply(l4, function(y) apply(y[,1,]- apply(l4$baseline[,1,],2, mean), 2, mean)),
+# #         main="Incremental proportion of RIF-R cohort cured after first treatment,\ncompared to baseline average", col=colors[2:6])
+# require(reshape2); require(ggplot2)
+# l4.m <- lapply(l4, function(x) melt(x, ))
+# boxplot(lapply(l4, function(y) apply(y[,1,], 2, mean)), ylim=c(0,1),
+#         main="Proportion of RIF-R cohort cured after first treatment", col=colors[2:6])
+# boxplot(lapply(l4, function(y) apply(y[,2,], 2, mean)), ylim=c(0,1),
+#         main="Proportion of RIF-R cohort cured after second treatment", col=colors[2:6])
+
+# # can look at step4status for a different subset:
+# l3 <- loutcomeboot(step4status, impact, c, include=(c$MOXI==1), copies=5, desiredsize = 1e4)
+# #and then tabulate across the cohort and plot as before:
+# par(mfrow=c(1,1), oma=c(0,0,1,1))
+# barplot(array(unlist(lapply(l3, FUN = function(x) tabulate(x[,1,]))), dim=c(length(statetypes),length(impact))), names.arg = names(impact), col=colors,
+#         main="Status after 1st treatment,\nFQ-r patients:\n", yaxt='n')
+# legend("right", legend = rev(names(statetypes)), fill=rev(colors), cex=1, bg='white')
+# #for Moxi R, Rif S patients, novel regimen looks same or slightly worse
+# l31 <- loutcomeboot(step4status, impact, c, include=(c$MOXI==1&c$RIF==0), copies=5, desiredsize = 1e4)
+# #and then tabulate across the cohort and plot as before:
+# par(mfrow=c(1,1), oma=c(0,0,1,1))
+# barplot(array(unlist(lapply(l31, FUN = function(x) tabulate(x[,1,]))), dim=c(length(statetypes),length(impact))), names.arg = names(impact), col=colors,
+#         main="Status after 1st treatment,\nFQ-r, RIF-s patients:\n", yaxt='n')
+# legend("right", legend = rev(names(statetypes)), fill=rev(colors), cex=1, bg='white')
+
 
 # # as a heat map for status over time (don't group by state)
 # par(mfrow=c(2,2), mar=c(4,4,1,1), oma=c(1,1,1,1))
@@ -227,19 +138,19 @@ ggplot(data = mm, aes(x=Scenario, y=Inftime)) +
 # mtext(text = "months", side = 1, outer=T, line=-1)
 # mtext(text = "Each horizontal line represents one realization of the patient's course under the specified scenario", side = 2, outer=T, line=-1)
 
-# for one run, sorted:
-par(mfrow=c(1,1), mar=c(4,4,1,1), oma=c(1,1,1,1))
-times <- seq(0,30,by=1)
-y <- loutcomeboot(function(x) x[c("eventtime","TBstate"),], impact, c, include=(c$RIF==1), copies=1, desiredsize = 1e5)$baseline
-z <- abind(y[,seq(1,45,by=2),1], y[,seq(2,46,by=2),1], along = 3, new.names = list("patient"=1:1e5, "step"=1:23, "a"=c("time","state")))
-barplot(xlab = "months elapsed", ylab="patients in cohort", border = NA, 
-        t(array(do.call('rbind', lapply(times, function(t) 
-          tabulate(unlist( z[, ,"state"][
-            cbind(1:dim(z)[[2]], apply(z[,,"time"], 1, function(x) ifelse(max(x)>t, which.max(x>t)-1, length(x)) ))]), nbins = length(statetypes))
-        )), dim=c(length(times), length(statetypes)), dimnames=list("time"=times, "state"=names(statetypes)))), 
-        col=colors, beside=F)
-legend("topright", legend = rev(names(statetypes)), fill=rev(colors), cex=0.8)
-mtext("Status of RIF-R patients over time, in baseline scenario (no novel regimen)", side=3)
+# # for one run, sorted:
+# par(mfrow=c(1,1), mar=c(4,4,1,1), oma=c(1,1,1,1))
+# times <- seq(0,30,by=1)
+# y <- loutcomeboot(function(x) x[c("eventtime","TBstate"),], impact, c, include=(c$RIF==1), copies=1, desiredsize = 1e5)$baseline
+# z <- abind(y[,seq(1,45,by=2),1], y[,seq(2,46,by=2),1], along = 3, new.names = list("patient"=1:1e5, "step"=1:23, "a"=c("time","state")))
+# barplot(xlab = "months elapsed", ylab="patients in cohort", border = NA, 
+#         t(array(do.call('rbind', lapply(times, function(t) 
+#           tabulate(unlist( z[, ,"state"][
+#             cbind(1:dim(z)[[2]], apply(z[,,"time"], 1, function(x) ifelse(max(x)>t, which.max(x>t)-1, length(x)) ))]), nbins = length(statetypes))
+#         )), dim=c(length(times), length(statetypes)), dimnames=list("time"=times, "state"=names(statetypes)))), 
+#         col=colors, beside=F)
+# legend("topright", legend = rev(names(statetypes)), fill=rev(colors), cex=0.8)
+# mtext("Status of RIF-R patients over time, in baseline scenario (no novel regimen)", side=3)
 
 # # for one run, sorted but in heatmap mode:
 # msort <- function(m)
@@ -258,21 +169,42 @@ mtext("Status of RIF-R patients over time, in baseline scenario (no novel regime
 # mtext(text = "cohort", side = 2, line=2)
 
 # for multiple scenarios, bar plots, :
-par(mfrow=c(2,2), mar=c(4,4,1,1), oma=c(1,1,2,1))
-times <- seq(0,30,by=1)
-yl <- loutcomeboot(function(x) x[c("eventtime","TBstate"),], impact, c, include=(c$RIF==1), copies=1, desiredsize = 1e4)
-zl <- lapply(yl, function(y) abind(y[,seq(1,45,by=2),1], y[,seq(2,46,by=2),1], along = 3, new.names = list("patient"=1:1e4, "step"=1:23, "a"=c("time","state"))))
-mapply( function(z, b)
-{ barplot(xlab = "months elapsed", ylab="patients in cohort", border = NA, 
-          t(array(do.call('rbind', lapply(times, function(t) 
-            tabulate(unlist( z[, ,"state"][
-              cbind(1:dim(z)[[1]], apply(z[,,"time"], 1, function(x) ifelse(max(x)>t, which.max(x>t)-1, length(x)) ))]), nbins = length(statetypes))
-          )), dim=c(length(times), length(statetypes)), dimnames=list("time"=times, "state"=names(statetypes)))), 
-          col=colors, beside=F, main=b) }, zl, names(zl))
-legend("bottomleft", legend = rev(names(statetypes)), fill=rev(colors), cex=0.7)
-mtext("Months elapsed", 1, outer=T, cex=0.7)
-mtext("Patients in cohort", 2, outer=T, cex=0.7)
-mtext("Status of RIF-R cohort over time", side=3, font=2, outer=T)
+yl <- loutcomeboot(function(x) x[c("eventtime","TBstate"),], impact, c, include=(c$RIF==1), copies=1, desiredsize = 1e5)
+zl <- lapply(yl, function(y) abind(y[,seq(1,35,by=2),1], y[,seq(2,36,by=2),1], along = 3, new.names = list("patient"=1:1e5, "step"=1:18, "a"=c("time","state"))))
+save(yl, zl, file=paste0("fig1RRstatestatus.",date,".Rdata"))
+maxtime <- 30; times <- seq(0,maxtime,by=1)
+unlist(statetypes)
+fullstatenames <- c(" \nTB not yet treated\n ", "shoulodn't show up", "On treatment", " \nOn treatment &\nacquired resistance",
+                    "Treatment failed", "Will relapse", "Cured", "Deceased", "Relapsed TB")
+plotorder <- c(1,5,9,6,3,4,7,8)
+pdf("Fig2.pdf", width=10, height=7)
+layout(matrix(c(1,3,2,4,5,5), ncol=3), widths = c(4,4,2))
+par(mar=c(3,3,1,2), oma=c(2,2,2,2))
+mapply( function(z, title)
+{ statestatus <- t(array(do.call('rbind', lapply(times, function(t) 
+      tabulate(unlist( z[, ,"state"][
+        cbind(1:dim(z)[[1]], apply(z[,,"time"], 1, function(x) ifelse(max(x)>t, which.max(x>t)-1, length(x)) ))]), nbins = length(statetypes))
+            )), dim=c(length(times), length(statetypes)), dimnames=list("time"=times, "state"=names(statetypes))))
+  
+  b <- barplot(xlab = "", ylab="", yaxt='n', xaxt='n', border = NA, space=0,
+          statestatus[plotorder,], 
+          col=colors, beside=F)
+  mtext(title, side=3, font=2,line=0.5, cex=1)
+  axis(side = 2, at = seq(0,1e5,by=2e4),labels = seq(0,100,by=20), cex.axis=0.8, las=2)
+  axis(side = 1, at = b[seq(1,length(b),by=3)],labels = seq(0,maxtime,by=3), cex.axis=0.8)
+  label <- statestatus[plotorder,maxtime]/1e3 >= 0.5 
+  text(x = (b[length(b)]+c(0,3,rep(0,sum(label)-2))), y = (cumsum(statestatus[plotorder,maxtime])- statestatus[plotorder,maxtime]/2)[label],pos=4, xpd=NA,
+       labels = paste0(round(statestatus[plotorder,maxtime]/1e3,1)[label], "%"), cex=0.9)
+  segments(b[length(b)],(cumsum(statestatus[plotorder,maxtime])[2]- statestatus[plotorder[2],maxtime]/2),
+           b[length(b)]+3,(cumsum(statestatus[plotorder,maxtime])[2]- statestatus[plotorder[2],maxtime]/2), xpd=NA)
+          }, 
+          zl, c("Current practice", "Novel regimen for RIF-R", "Novel RIF-R regimen + expanded RIF DSTS", "Novel regimen for all"))
+mtext("Months elapsed since TB onset", 1, outer=T, cex=1, adj = .35)
+mtext("% of RIF-R TB cohort", 2, outer=T, cex=1, line=-0.5)
+# mtext("Status of RIF-R cohort over time", side=3, font=2, outer=T, line=0.5)
+plot.new()
+legend("center", legend = rev(fullstatenames[plotorder]), fill=rev(colors[1:8]), cex=1, xpd=NA,title = expression(bold("Status")))
+dev.off()
 
 # can also look at above differences for other subsets e.g. +- moxi
 
@@ -281,7 +213,7 @@ mtext("Status of RIF-R cohort over time", side=3, font=2, outer=T)
 
 
 # tally up time alive: # need to cut all scenarios off at the same point, say 3 years - no, need a longer time window, see below:
-followyears <- 20
+
 l <- loutcomeboot(individualoutcomefunction =time.in.state, states=1:7, cutofftime=12*followyears, carryforward=T, 
                   simoutput=impact, c=c, include=(c$RIF==1), copies = 3, desiredsize = 1e5)
 lapply(l, function(x) apply(x[,1,],2,summary))
@@ -298,12 +230,6 @@ lapply(l, function(x) apply(x[,1,] - l$baseline[,1,],2,mean))
 par(mfrow=c(1,1), mar=c(4,4,3,1), oma=c(1,1,1,1))
 boxplot( lapply(l, function(x) apply(x[,1,] - l$baseline[,1,],2,mean)), main=paste0("Incremental months of life gained per patient,\nover ",followyears," years after TB onset"))
 
-# time on treatment (of some kind)
-l <- loutcomeboot(individualoutcomefunction =time.in.state, states=c(statetypes$treating, statetypes$treating_adr), cutofftime=12*followyears, carryforward=T, 
-                  simoutput=impact, c=c, include=(c$RIF==1), copies = 3, desiredsize = 1e5)
-lapply(l, function(x) apply(x[,1,],2,summary))
-boxplot(lapply(l, function(x) x[,1,1]), main="Total time on treatment per RIF-R patient", col=colors, ylim=c(0,20), ylab="months")
-boxplot(lapply(l, function(x) apply(x[,1,], 2, mean)), main="Average time on treatment for RIF-R patients", col=colors, ylim=c(0,20), ylab="months")
 
 # time deceased i.e. YLL (compare to time alive, should see inverse)
 # but don't trust this because of tail of life expectancy
@@ -346,15 +272,6 @@ l <-  loutcomeboot(individualoutcomefunction =time.and.courses.to.cure,
                    simoutput=impact, c=c, include=(c$RIF==0), copies = 3, desiredsize = 1e5)
 boxplot(lapply(l, function(x) x[,1,1]), main="Time (in months) from TB onset to\nsuccessful treatment completion, for those ultimately cured,\nRS-TB patients only")
 
-
-# total infectious time:
-l <- loutcomeboot(individualoutcomefunction =time.in.state, states=c(1,2,6), cutofftime=12*10, carryforward=T, 
-                  simoutput=impact, c=c, include=(c$RIF==1), copies = 3, desiredsize = 1e4)
-lapply(l, function(x) apply(x[,1,],2,summary))
-lapply(l, function(x) apply(x[,1,],2,mean)) # about a 10% reduction for a good novelRR regimen with poor coverage, which is what I'd expect?
-# and effect more than tripled by novelrrx because it ~triples the number who get good treatment the first round, vs 2nd or 3rd or beyond
-boxplot(lapply(l, function(x) x[,1,1]), main="Total infectious time, RR-TB cases")
-## also consider by smear status here?? (but note that smear pos at dx doesn't mean always smear pos)
 
 # and for dsT:
 l <- loutcomeboot(individualoutcomefunction =time.in.state, states=c(1,2,6), cutofftime=12*10, carryforward=T, 
@@ -519,3 +436,34 @@ outcomes$bpamz4 <- modelcourse(scenario = "2a", cohort, params,reps = reps)
 outcomes$bpamz6 <- modelcourse(scenario = "2b", cohort, params,reps = reps)
 outcomes$fullnovel <- modelcourse(scenario = "5", cohort, params,reps = reps)
 outcomes_highADR <- outcomes
+
+
+
+# showing with and without regimen delays:
+# should look at the same population I'm considering in the main aalysis. Probably all patietns or RIF==1.
+# I initially consider proportion cured in a given round, but total infectious time will be more important
+delays <- readRDS(file = paste0("delays.",date,".RDS"))
+# d <- lapply(loutcomeboot(step4812cure, delays, c, include=(rep(1, length=nrow(c))), copies=50, desiredsize = 1e5), function(y) apply(y[,1,], 2, mean))
+# l <- lapply(loutcomeboot(step4812cure, impact, c, include=(rep(1, length=nrow(c))), copies=50, desiredsize = 1e5), function(y) apply(y[,1,], 2, mean))
+dinf <- loutcomeboot(individualoutcomefunction =time.in.state, states=c(1,2,6), cutofftime=12*10, carryforward=T, 
+                     simoutput=delays, c=c, include=(c$RIF==1), copies = 50, desiredsize = 1e5)
+linf <- loutcomeboot(individualoutcomefunction =time.in.state, states=c(1,2,6), cutofftime=12*10, carryforward=T, 
+                     simoutput=impact, c=c, include=(c$RIF==1), copies = 50, desiredsize = 1e5)
+di <- lapply(dinf, function(x) apply(x[,1,], 2, mean))
+li <- lapply(linf, function(x) apply(x[,1,], 2, mean))
+str(di)
+ddf <- data.frame(di); ldf <- data.frame(li)
+ddf$params <- "Delay for alternate regimens"
+ldf$params <- "No delays"
+require(dplyr)
+require(data.table)
+m <- bind_rows(ldf, ddf)
+mm <- melt(m, id.vars="params")
+colnames(mm) <- c("Parameters", "Scenario", "Inftime")
+mm$Parameters <- factor(mm$Parameters, levels=c("No delays", "Delay for alternate regimens"))
+require(ggplot2)
+ggplot(data = mm, aes(x=Scenario, y=Inftime)) +
+  geom_boxplot(aes(fill=Parameters)) +
+  ggtitle("Effect of regimen delays") + theme(plot.title = element_text(hjust = 0.5)) +
+  ylab("Average time with untreated active TB (months)") + ylim(0,30)
+# rm(delays)

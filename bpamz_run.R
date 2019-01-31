@@ -1,7 +1,10 @@
 # setwd("C:/Users/ekendal2/OneDrive - Johns Hopkins University/Research/universal regimen/universal")
+
+date <- "20190109"
+setting <- "SEA"
+
 source("bpamz_cohort.R")
 
-date <- "20181231"
 
 cohortsize <- 1e8 
 # 1e7 is barely enough to capture all but the rarest combinations at least once. Really using this to get freqs, and would be easier to just calculate probs rather than creating a cohort but I've already done this so will go with it. Should use 1e8, but that req's >>4gb memory.
@@ -28,14 +31,21 @@ impact$baseline <- modelcourse(scenario = "0", c, params, reps = reps)
 impact$novelrr <- modelcourse(scenario = "1a", c, params, reps = reps)
 impact$novelrrx <- modelcourse(scenario = "1x", c, params, reps = reps)
 impact$novelpantb <- modelcourse(scenario = "3", c, params, reps = reps)
-saveRDS(object = impact, file = paste0("impact.",date,".RDS"))
+save(impact, file = paste0("impact.",date,".Rdata"))
+
+moreimpact <- list()
+moreimpact$all4 <- modelcourse(scenario = "2a", c, params, reps = reps)
+moreimpact$all6 <- modelcourse(scenario = "2b", c, params, reps = reps)
+save(moreimpact, file = paste0("moreimpact.",date,".Rdata"))
+rm(moreimpact)
 
 dst <- list()
-dst$noxxdr <- modelcourse(scenario = "3", c, params, reps = reps)
-dst$stepxxdr <- modelcourse(scenario = "4", c, params, reps = reps)
-dst$fullxxdr <- modelcourse(scenario = "5", c, params, reps = reps)
-saveRDS(object = dst, file = paste0("dst.",date,".RDS"))
-
+dst$novelrrx <- impact$novelrrx
+dst$noxxdr <- modelcourse(scenario = "3x", c, params, reps = reps)
+dst$stepxxdr <- modelcourse(scenario = "4x", c, params, reps = reps)
+dst$fullxxdr <- modelcourse(scenario = "5x", c, params, reps = reps)
+save(dst, file = paste0("dst.",date,".Rdata"))
+rm(dst)
 
 # SA: delays Don't really want to advocate for getting rid of DST, and skipping xpert would have TB detection downsides that we aren't modeling. 
 ## ...so the main question of interest may be the elimination of delays associated with needing a separate DR regimen -- 
@@ -44,12 +54,14 @@ saveRDS(object = dst, file = paste0("dst.",date,".RDS"))
 ## ... Or maybe, just the impact blocks (although novelrr wouldn't change anything))
 saveparams <- params
 allparams <- read.csv("allparams.csv", header=T, stringsAsFactors = F)
+# assuming SEA setting here
 params <- as.numeric(allparams[,2]); names(params) <- allparams[,1]; params["DSTdelay"] <- 0
+params["Tbdxtime_recurrence"] <- params["Tbdxtime_recurrenceratio"]*params["Tbdxtime"]
 delays <- list()
 delays$baseline <- modelcourse(scenario = "0", c, params, reps = reps)
 delays$novelrr <- modelcourse(scenario = "1a", c, params, reps = reps)
 delays$novelrrx <- modelcourse(scenario = "1x", c, params, reps = reps)
 delays$novelpantb <- modelcourse(scenario = "3", c, params, reps = reps)
-saveRDS(object = delays, file = paste0("delays.",date,".RDS"))
+save(delays, file = paste0("delays.",date,".Rdata"))
 params <- saveparams 
-
+rm(delays)

@@ -1,5 +1,5 @@
 Parameter,Estimate,UR low,UR high,Southafrica,
-Retreatment_in_All,0.17,0.1,0.22,0.9,copied from patient characteristics en block
+Retreatment_in_All,0.17,0.1,0.22,0.1,copied from patient characteristics en block
 RIF-R_in_New,0.028,0.02,0.036,0.03,
 RIF-R_in_Retreatment,0.13,0.05,0.2,0.07,
 PZA-R_in_RIF-S,0.051299508,0.005,0.065,0.01,
@@ -49,7 +49,7 @@ BPaM_cxconv,0.94,0.89,0.96,,See treatment outcome assumptions. Range comes from 
 BPaZ_cxconv,0.89,0.84,0.92,,See treatment outcome assumptions
 MDR_failrelapse_FQ-S,0.108706852,0.07,0.2,,"See treatment outcome assumptions. Low bound is based on STREAM 1, (f+r)/(s+f+r)=(1+4+0+2)/(124-5-3-3-4-3). High bound assumes worse in non-research settings. "
 MDR_failrelapse_FQ-R,0.260869565,0.11,0.4,,See treatment outcome assumptions. Low bound assumes as good as FQ-S with modern drugs. High bound assumes additional resistance along with FQ-R.
-INHmono_failrelapse,0.05,0.03,0.1,,See treatment outcome assumptions
+INHmono_failrelapse,0.05,0.03,0.1,,See treatment outcome assumptions. Is after 9 months. 
 Highrecurrence,0.8,,,,See treatment outcome assumptions
 adr_r,0.005,,,,From resistance outcomes en block
 adr_bpamz,0.002,,0.01,,
