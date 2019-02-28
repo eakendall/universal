@@ -10,15 +10,17 @@ bootsample <- function(c, include, desiredsize, course_outcomes)
   randindex <-  sample(1:dim(course_outcomes)[[3]], size = desiredsize, replace=T)
   return(sapply(X = 1:dim(course_outcomes)[[1]], function(x) course_outcomes[cbind(x, bootindex, randindex)]))
 }
+
 #...which then feeds into
-outcomeboot <- function(individualoutcomefunction, course, c, include=rep(1, dim(course)[[1]]), copies=10, desiredsize=1e4)
+outcomeboot <- function(individualoutcomefunction, course, c, include=rep(TRUE, dim(course)[[1]]), copies=50, desiredsize=1e5)
 {
   course_outcomes <- apply(X=course, FUN=individualoutcomefunction, MARGIN = c(1,4))
   return(replicate( copies, bootsample(c, include, desiredsize, course_outcomes)))
 }
-# or for a list of courses for different scenarios
+
+#... or for a list of courses for different scenarios
 loutcomeboot <- function(individualoutcomefunction, simoutput, c, 
-                         include=rep(1, nrow(c)), copies=10, desiredsize=1e4, course_outcomes=NA, 
+                         include=rep(TRUE, nrow(c)), copies=50, desiredsize=1e5, course_outcomes=NA, 
                          oncluster=F, ...) 
 {
   freqweights <- c$Freq # simoutput[[1]][,"Freq",1,1]
@@ -41,13 +43,15 @@ loutcomeboot <- function(individualoutcomefunction, simoutput, c,
   }
   return(l)
 }
+
 step4status <- function(patiententry) {patiententry[c("TBstate", "eventtime"),4] } 
 step8status <- function(patiententry) {patiententry[c("TBstate", "eventtime"),8] }
-step4812cure <- function(patiententry) {patiententry[c("TBstate"),c(4, 8, 12)]=="7" } 
+step4812cure <- function(patiententry) {c(patiententry[c("TBstate"),c(4, 8, 12)]=="7", patiententry[patientvars,1]) } 
+step4cure <- function(patiententry) {c(patiententry[c("TBstate"),4]=="7", patiententry[patientvars,1]) } 
 
 # redefining from cohort file, for single-patient course:
 # but note that need to keep characteristics here, and call this function with an include of all pts at risk for the characteristic, not just those who have it at baseline (e.g. when talking about adr)
-# will return time in states of interest, and final tbstate
+# will return time in states of interest, final tbstate, and initial characteristics
 time.in.state <- function(patiententry, states=8, characteristics=c(), characteristicvals=1, 
                           cutofftime=100*12, carryforward=F)
 {
@@ -61,17 +65,20 @@ time.in.state <- function(patiententry, states=8, characteristics=c(), character
   if (carryforward)  # if carryforward, will maintain final state incl infectous states from end of data to cutofftime.
     if (patiententry["TBstate",ncol(patiententry)] %in% states)
       t <- t + max(0, cutofftime-patiententry["eventtime",ncol(patiententry)])
-  return(c(t, patiententry["TBstate",ncol(patiententry)]))
+  return(c(t, patiententry["TBstate",ncol(patiententry)], patiententry[patientvars,1]))
 }
 
-still.in.state <- function(patiententry, states=8, time=36)
+still.in.state <- function(patiententry, states=8, t=36)
 {
-  # look at last entry with time < time, is it in states?
-  maxed <- (max(patiententry["eventtime",])>t)
+  # find last entry with time < time
+  maxed <- (max(patiententry["eventtime",])>=t)
+  # is it in states?
   return(c(
     patiententry["TBstate", ifelse(maxed, which.max(patiententry["eventtime",]>t)-1, length(patiententry["eventtime",]))] %in% states,
-    maxed))
+    maxed,
+    patiententry[patientvars,1]))
 }
+
 time.and.courses.to.cure <- function(patiententry) # also include number of treatment courses
 {  c(
   ifelse(patiententry["TBstate",ncol(patiententry)]==statetypes$cured, patiententry["eventtime",which.max(patiententry["TBstate",]==statetypes$cured)], NA),
@@ -80,11 +87,47 @@ time.and.courses.to.cure <- function(patiententry) # also include number of trea
 }
 
 
-require(RColorBrewer)
-colors <- c(palette(brewer.pal(length(statetypes), name = "Set1")),"black")
-# colors <- c(palette(brewer.pal(length(statetypes)-1, name = "Set2")), "black")
-# colors <- c("black", palette(brewer.pal(length(statetypes)-1, name = "Accent")))
 
+treatmentsuccess <- function(patiententry) #  treated then cured, and append rif and moxi status, and partialmoxi and pza
+{ return(c(patiententry["eventtype",3]==eventtypes$treatmentstart, 
+           patiententry["TBstate",4]==7,
+           patiententry["RIF",1],
+           patiententry["MOXI",1],
+           patiententry["partialmoxi",1],
+           patiententry["PZA",1]) ) }
+
+
+# for sensitivty analysis:
+
+
+
+shortmodelcourse <- function(scenario="0", cohort, params, reps=1, steplimit=4, stochasticmode=TRUE) # will need to repeat same for each rep of a given patient, if probabilistic events
+{
+  repcohort <- do.call(rbind, replicate(reps, cohort, simplify=FALSE))
+  intervention <- set.scenario(scenario)
+  N=nrow(repcohort)
+  
+  trackeditems <- c("eventtime", "eventtype", "TBstate", "Currentregimen", colnames(cohort))
+  
+  current <- array(dim=c(nrow(repcohort), length(trackeditems))); colnames(current) <- trackeditems
+  course <- array(NA, dim=c(dim(current),1)); dimnames(course) <- list("patient"=1:nrow(repcohort), "trackeditem"=trackeditems, "event"=numeric())
+  
+  # TB onset for all patients
+  course[,,1] <- current[] <- cbind(0, eventtypes$TBonset, statetypes$undiagnosed, regimentypes$none, data.matrix(repcohort))
+  
+  # for each separate patient, determine their course: 
+  # (act on current event, save current to course when move to next event)
+  course <- abind(course, diagnosisevent(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
+  course <- abind(course, treatmentinitiationattempt(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes, scenario), along=3)
+  course <- abind(course, treatmentend(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
+  course <- abind(course, relapseevent(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
+  
+  newcourse <- array(course, dim=c(dim(course)[1]/reps,reps,dim(course)[2:3]))
+  newcourse <- aperm(newcourse, c(1,3,4,2))
+  dimnames(newcourse) <- list("patient"=c(), "characteristic"=trackeditems,"timestep"=c(),"rep"=c())
+  
+  return(newcourse)
+}
 
 
 # 

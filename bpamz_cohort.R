@@ -1,19 +1,22 @@
 
 # setwd("C:/Users/ekendal2/OneDrive - Johns Hopkins University/Research/universal regimen")
 
+# 20190211 change in regimens with moxi-R: 
+# if FQ-R detected (regardless of level), choose backup regimen which has same efficacy that BPaMZ would have had
+# in that patient in absense of M resistance. Could be achieved by adding/substituing L (with or wo PZA) and/or '
+# by increasing the moxi dose. Will call this "backup", use it regardless of novelhx, and change activeregimens accordingly. 
+
 require(arm)
 require(dplyr)
 
 allparams <- read.csv("allparams.csv", header=T, stringsAsFactors = F)
-if(setting=="SEA") params <- as.numeric(allparams[,2])
-if(setting=="SAf") params <- as.numeric(allparams[,5])
+params <- as.numeric(allparams[,2])
+if(setting=="SAf") params[!is.na(allparams[,5])] <- as.numeric(allparams[,5][!is.na(allparams[,5])])
 names(params) <- allparams[,1]
 params["Tbdxtime_recurrence"] <- params["Tbdxtime_recurrenceratio"]*params["Tbdxtime"]
 
-params["Regimendelay"] <- 0
-params["Regimenloss"] <- 0
 
-increaseodds <- function(recurrenceprobs, OR)
+increaseodds <- function(recurrenceprobs, OR) # increase odds of success by OR
 {
   initialodds <- (1-recurrenceprobs)/recurrenceprobs
   newodds <- OR*initialodds
@@ -21,96 +24,184 @@ increaseodds <- function(recurrenceprobs, OR)
   return(newrecurrenceprobs)
 }
 
-drugs <- c("RIF", "INH", "PZA", "MOXI", "partialmoxi","BDQ", "PA")
-regimens <- c("hrze", "mdr", "bpamz4", "bpamz6", "bpal", "backup", "backup_mdr")
-# activeregimens <- c("HR(ZE)","R(ZE)","(ZE)","MDR, FQ-S","MDR, FQ-R","BPaMZ","BPaM","BPaZ","BMZ","PaMZ",
-#                     "BPa","BZ","BM","PaZ","PaM","MZ","B","Pa","M","Z","BPaL","BL","PaL","L","none")
-activeregimens <- c("HR(ZE)","R(ZE)","H(ZE)","(ZE)","MDR, FQ-S","MDR, FQ-low","MDR, FQ-R","BPaMZ","BPaM","BPaZ","BPamZ", "BMZ","PaMZ",
-                    "BPa","BPam", "BZ","BmZ", "BM","PaZ","PamZ", "PaM","MZ","B","Bm", "Pa","Pam","M","Z","mZ","BPaL","BL","PaL","L","m","none")
-patientvars <- c("RxHist", "NovelHist","HIV", "SmearStatus", drugs)
+splitodds <- function(recurrenceprobsa, recurrenceprobsb)
+{
+  recurrenceprobsa[recurrenceprobsa>0.99] <- 0.99
+  recurrenceprobsb[recurrenceprobsb>0.99] <- 0.99
+  # average the logit of recurrence
+  meanlogit <-( log((recurrenceprobsa)/(1-recurrenceprobsa)) + log((recurrenceprobsb)/(1-recurrenceprobsb)) )/2
+  # and invert:
+  return(exp(meanlogit)/(1+exp(meanlogit)))
+}
 
-regimendurations <- c(6, 18, 4, 6, 6, 6, 18)
+drugs <- c("RIF", "INH", "PZA", "MOXI", "partialmoxi","BDQ", "PA")
+adrs <- c("RIF", "INH", "MOXI", "BDQ", "PA")
+
+regimens <- c("hrze", "mdr", "bpamz4", "bpamz6", "backup")
+regimendurations <- c(6, 18, 4, 6, 6)
+# regimendurations <- c(6, 18, 4, 6, 6, 6, 6, 18)
+activeregimens <- c("HR(ZE)","R(ZE)","H(ZE)","(ZE)","MDR, FQ-S","MDR, FQ-low","MDR, FQ-R","BPaMZ","BPaM","BPaZ","BPamZ", "BMZ","PaMZ",
+                    "BPa","BPam", "BZ","BmZ", "BM","PaZ","PamZ", "PaM","MZ","B","Bm", "Pa","Pam","M","Z","mZ","m","none")
+# activeregimens <- c("HR(ZE)","R(ZE)","H(ZE)","(ZE)","MDR, FQ-S","MDR, FQ-low","MDR, FQ-R","BPaMZ","BPaM","BPaZ","BPamZ", "BMZ","PaMZ",
+#                     "BPa","BPam", "BZ","BmZ", "BM","PaZ","PamZ", "PaM","MZ","B","Bm", "Pa","Pam","M","Z","mZ","BPaL","BL","PaL","L","m","none")
+# activeregimens <- c("HR(ZE)","R(ZE)","H(ZE)","(ZE)","MDR, FQ-S","MDR, FQ-low","MDR, FQ-R","BPaMZ","BPaM","BPaZ","BPamZ", "BPammZ", "BMZ","PaMZ",
+#                     "BPa","BPam","BPamm", "BZ","BmZ","BmmZ", "BM","PaZ","PamZ","PammZ", "PaM","MZ","B","Bm","Bmm", "Pa","Pam","Pamm","M","Z","mZ","mmZ","BPaL","BL","PaL","L","m","mm","none")
+patientvars <- c("RxHist", "NovelHist","HIV", "SmearStatus", "DSTs", drugs)
+
 monthsmodeled <- c(1:6, 9, 12, 18)
-# monthsfollowed <- 36
 
 eventtypes <- list(TBonset=1, TBdiagnosis=2, treatmentstart=3, treatmentend=4, death=5, pretreatmentltfu=6, carryforward=7)
 # diagnosis will incorporate DST and regimen selection), treatment start will incorporate ADR, 
 # For each event, track RxHist, NovelHist, current susceptibilities, TB state.
-statetypes <- list(undiagnosed=1, diagnosed=2, treating=3, treating_adr=4, failed=5, pendingrelapse=6, cured=7, deceased=8, relapsed=9)
+statetypes <- list(undiagnosed=1, diagnosed=2, treating=3, treating_adr=4, failed=5, pendingrelapse=6, cured=7, deceased=8, relapsed=9, pretreatmentlost=10)
 regimentypes <- as.list(1:length(regimens)); names(regimentypes) <- regimens; regimentypes$none <- 0
 
 
-# Set up cohort of patients
-# to look only at a particular patient type, use diferent params, 
-# or to keep other ratios correct (e.g. new:retreatment whensubsetting to RR), make a huge cohort and then filter.
-make.cohort <- function(params, patientvars, N=10000)
-{
-  cohort <- array(NA, dim=c(N,length(patientvars))); colnames(cohort)=patientvars
-  cohort <- data.frame(cohort)
-  
-  cohort$RxHist <- sample(c(0,1), size = nrow(cohort), replace = T, 
-                          prob=c(1-params['Retreatment_in_All'], params['Retreatment_in_All']))
-  cohort$NovelHist <- 0
-  cohort$HIV <- sample(c(0,1), size = nrow(cohort), replace = T, 
-                       prob=c(1-params['HIV_in_all'], params['HIV_in_all']))
-  cohort$SmearStatus[cohort$HIV==0] <- sample(c(0, 1), size = sum(cohort$HIV==0), replace = T, 
-                                                 prob=c(1-params['Smearpos_in_HIVneg'], params['Smearpos_in_HIVneg']))
-  cohort$SmearStatus[cohort$HIV==1] <- sample(c(0, 1), size = sum(cohort$HIV==1), replace = T, 
-                                              prob=c(1-params['Smearpos_in_HIVpos'], params['Smearpos_in_HIVpos']))
-  cohort$RIF[cohort$RxHist==0] <- sample(c(0, 1), size = sum(cohort$RxHist==0), replace = T, 
-                                         prob=c(1-params['RIF-R_in_New'], params['RIF-R_in_New']))
-  cohort$RIF[cohort$RxHist==1] <- sample(c(0, 1), size = sum(cohort$RxHist==1), replace = T, 
-                                         prob=c(1-params['RIF-R_in_Retreatment'], params['RIF-R_in_Retreatment']))
-  cohort$INH[cohort$RxHist==0&cohort$RIF==0] <- sample(c(0, 1), size = sum(cohort$RxHist==0&cohort$RIF==0), replace = T, 
-                                                       prob=c(1-params['INH-R_in_NewRIF-S'], params['INH-R_in_NewRIF-S']))
-  cohort$INH[cohort$RxHist==1&cohort$RIF==0] <- sample(c(0, 1), size = sum(cohort$RxHist==1&cohort$RIF==0), replace = T, 
-                                                       prob=c(1-params['INH-R_in_RetreatmentRIF-S'], params['INH-R_in_RetreatmentRIF-S']))
-  cohort$INH[cohort$RIF==1] <- sample(c(0, 1), size = sum(cohort$RIF==1), replace = T, 
-                                      prob=c(1-params['INH-R_in_RIF-R'], params['INH-R_in_RIF-R']))
+# # Set up cohort of patients
+# # to look only at a particular patient type, use diferent params, 
+# # or to keep other ratios correct (e.g. new:retreatment whensubsetting to RR), make a huge cohort and then filter.
+# make.cohort <- function(params, patientvars, N=10000)
+# {
+#   cohort <- array(NA, dim=c(N,length(patientvars))); colnames(cohort)=patientvars
+#   cohort <- data.frame(cohort)
+#   
+#   cohort$RxHist <- sample(c(0,1), size = nrow(cohort), replace = T, 
+#                           prob=c(1-params['Retreatment_in_All'], params['Retreatment_in_All']))
+#   cohort$NovelHist <- 0
+#   cohort$HIV <- sample(c(0,1), size = nrow(cohort), replace = T, 
+#                        prob=c(1-params['HIV_in_all'], params['HIV_in_all']))
+#   cohort$SmearStatus[cohort$HIV==0] <- sample(c(0, 1), size = sum(cohort$HIV==0), replace = T, 
+#                                                  prob=c(1-params['Smearpos_in_HIVneg'], params['Smearpos_in_HIVneg']))
+#   cohort$SmearStatus[cohort$HIV==1] <- sample(c(0, 1), size = sum(cohort$HIV==1), replace = T, 
+#                                               prob=c(1-params['Smearpos_in_HIVpos'], params['Smearpos_in_HIVpos']))
+#   cohort$RIF[cohort$RxHist==0] <- sample(c(0, 1), size = sum(cohort$RxHist==0), replace = T, 
+#                                          prob=c(1-params['RIF-R_in_New'], params['RIF-R_in_New']))
+#   cohort$RIF[cohort$RxHist==1] <- sample(c(0, 1), size = sum(cohort$RxHist==1), replace = T, 
+#                                          prob=c(1-params['RIF-R_in_Retreatment'], params['RIF-R_in_Retreatment']))
+#   cohort$INH[cohort$RxHist==0&cohort$RIF==0] <- sample(c(0, 1), size = sum(cohort$RxHist==0&cohort$RIF==0), replace = T, 
+#                                                        prob=c(1-params['INH-R_in_NewRIF-S'], params['INH-R_in_NewRIF-S']))
+#   cohort$INH[cohort$RxHist==1&cohort$RIF==0] <- sample(c(0, 1), size = sum(cohort$RxHist==1&cohort$RIF==0), replace = T, 
+#                                                        prob=c(1-params['INH-R_in_RetreatmentRIF-S'], params['INH-R_in_RetreatmentRIF-S']))
+#   cohort$INH[cohort$RIF==1] <- sample(c(0, 1), size = sum(cohort$RIF==1), replace = T, 
+#                                       prob=c(1-params['INH-R_in_RIF-R'], params['INH-R_in_RIF-R']))
+#   cohort$DSTs <- 0
+# 
+# # if modeling PZA-moxi correlation, will correlate only with MOXI (ignore partialmoxi). 
+# # Within each RR stratum, I'll have a proportion m of Moxi R vs S, and an overall proportion z of PZA-R I need to assign among the rr
+# # If I assign proportion a (oro the RR or RS) to be both z and m resistant, then OR = a(1-z-m+a)/(m-a)(z-a), and solving a quadratic for a:
+#   imputecombo <- function(OR, z, m)
+#   { C1 <- (OR-1); C2 <- (z+m-OR*z-OR*m-1); C3 <- OR*m*z
+#     a2 = (-C2 - sqrt(C2^2 - 4*C1*C3))/(2*C1)
+#     if (0 <= a2 & a2 <= 1)
+#       return(c(a2, z-a2, m-a2, 1-z-m+a2)) # z and m, then z not m, then m not z, then neither
+#     else (return(NA))
+#   }
+#   
+#   cohort$PZA <- cohort$MOXI <- NA
+#   cohort[cohort$RIF==1,c("PZA", "MOXI")] <- array(c(1,1,0,0,1,0,1,0), dim=c(4,2))[sample(1:4, size=sum(cohort$RIF==1), replace=T,
+#                                                                             prob=imputecombo(OR=params["OR-PZA-if_MOXI"], z=params['PZA-R_in_RIF-R'], m=params['MOXI-R-any_in_RIF-R']))
+#                                                                             ,]
+#   cohort[cohort$RIF==0,c("PZA", "MOXI")] <- array(c(1,1,0,0,1,0,1,0), dim=c(4,2))[sample(1:4, size=sum(cohort$RIF==0), replace=T,
+#                                                                                          prob=imputecombo(OR=params["OR-PZA-if_MOXI"], z=params['PZA-R_in_RIF-S'], m=params['MOXI-R-any_in_RIF-S']))
+#                                                                                   ,]
+# 
+#     cohort$partialmoxi[cohort$MOXI==1&cohort$RIF==1] <- sample(c(0, 1), size = sum(cohort$MOXI==1&cohort$RIF==1), replace = T, 
+#                                                              prob=c(params['MOXI-R-highlevel_in_RIF-R']/params['MOXI-R-any_in_RIF-R'], 
+#                                                                     1 - params['MOXI-R-highlevel_in_RIF-R']/params['MOXI-R-any_in_RIF-R']))
+#   cohort$partialmoxi[cohort$MOXI==1&cohort$RIF==0] <- sample(c(0, 1), size = sum(cohort$MOXI==1&cohort$RIF==0), replace = T, 
+#                                                              prob=c(params['MOXI-R-highlevel_in_RIF-S']/params['MOXI-R-any_in_RIF-S'], 
+#                                                                     1 - params['MOXI-R-highlevel_in_RIF-S']/params['MOXI-R-any_in_RIF-S']))
+#   cohort$partialmoxi[cohort$MOXI==0] <- 0
+#   
+#   # # here, MOXI indicates any moxi resistance, and partialmoxi indicates only low-level/partial resistance (and partial activity)
+#   # cohort$MOXI[cohort$RIF==1] <- sample(c(0, 1), size = sum(cohort$RIF==1), replace = T, 
+#   #                                      prob=c(1-params['MOXI-R-any_in_RIF-R'], params['MOXI-R-any_in_RIF-R']))
+#   # cohort$MOXI[cohort$RIF==0] <- sample(c(0, 1), size = sum(cohort$RIF==0), replace = T, 
+#   #                                      prob=c(1-params['MOXI-R-any_in_RIF-S'], params['MOXI-R-any_in_RIF-S']))
+#   # cohort$PZA[cohort$RIF==1& cohort$MOXI==1] <- sample(c(0, 1), size = sum(cohort$RIF==1), replace = T, 
+#   #                                     prob=c(1-params['PZA-R_in_RIF-R'], params['PZA-R_in_RIF-R']))
+#   # cohort$PZA[cohort$RIF==0] <- sample(c(0, 1), size = sum(cohort$RIF==0), replace = T, 
+#   #                                     prob=c(1-params['PZA-R_in_RIF-S'], params['PZA-R_in_RIF-S']))
+# 
+#   cohort$BDQ <- sample(c(0, 1), size = nrow(cohort), replace = T,
+#                        prob=c(1-params['BDQ-R_in_All'], params['BDQ-R_in_All']))
+#   cohort$PA <- sample(c(0, 1), size = nrow(cohort), replace = T, 
+#                       prob=c(1-params['PA-R_in_All'], params['PA-R_in_All']))
+#   
+#   return(cohort)
+# }
 
-# if modeling PZA-moxi correlation, will correlate only with MOXI (ignore partialmoxi). 
-# Within each RR stratum, I'll have a proportion m of Moxi R vs S, and an overall proportion z of PZA-R I need to assign among the rr
-# If I assign proportion a (oro the RR or RS) to be both z and m resistant, then OR = a(1-z-m+a)/(m-a)(z-a), and solving a quadratic for a:
+# Set up cohort of patients by proaility instead (can choose N later)
+cohort.probs <- function(params, patientvars)
+{
+  
+  types <- expand.grid(c(0,1), #RxHist
+                       c(0), # Novelhist
+                       c(0,1), # HIV
+                       c(0,1), # smearstatus
+                       c(0), #DSTs
+                       c(0,1), # RIF
+                       c(0,1), # INH
+                       c(0,1), # PZA
+                       c(0,1), #MOXI
+                       c(0,1), #Partialmoxi
+                       c(0), #B
+                       c(0)) # Pa
+  colnames(types) <- patientvars
+  types <- data.frame(types)
+  
+  probs <- numeric(nrow(types))
+  
+  probs <- ifelse(types$RxHist, params['Retreatment_in_All'], 1-params['Retreatment_in_All'])
+  probs <- probs* ifelse(types$HIV, params['HIV_in_all'], 1-params['HIV_in_all'])
+  probs[types$HIV==0] <- probs[types$HIV==0]*ifelse(types$SmearStatus[types$HIV==0], params['Smearpos_in_HIVneg'], 1-params['Smearpos_in_HIVneg'])
+  probs[types$HIV==1] <- probs[types$HIV==1]*ifelse(types$SmearStatus[types$HIV==1], params['Smearpos_in_HIVpos'], 1-params['Smearpos_in_HIVpos'])
+  
+  probs[types$RxHist==0] <- probs[types$RxHist==0]*ifelse(types$RIF[types$RxHist==0], params['RIF-R_in_New'], 1-params['RIF-R_in_New'])
+  probs[types$RxHist==1] <- probs[types$RxHist==1]*ifelse(types$RIF[types$RxHist==1], params['RIF-R_in_Retreatment'], 1-params['RIF-R_in_Retreatment'])
+
+  probs[types$RxHist==0&types$RIF==0] <- probs[types$RxHist==0&types$RIF==0]*ifelse(types$INH[types$RxHist==0&types$RIF==0], params['INH-R_in_NewRIF-S'], 1-params['INH-R_in_NewRIF-S'])
+  probs[types$RxHist==1&types$RIF==0] <- probs[types$RxHist==1&types$RIF==0]*ifelse(types$INH[types$RxHist==1&types$RIF==0], params['INH-R_in_RetreatmentRIF-S'], 1-params['INH-R_in_RetreatmentRIF-S'])
+  probs[types$RIF==1] <- probs[types$RIF==1]*ifelse(types$INH[types$RIF==1], params['INH-R_in_RIF-R'], 1-params['INH-R_in_RIF-R'])
+  
+  # if modeling PZA-moxi correlation, will correlate only with MOXI (ignore partialmoxi). 
+  # Within each RR stratum, I'll have a proportion m of Moxi R vs S, and an overall proportion z of PZA-R I need to assign among the rr
+  # If I assign proportion a (oro the RR or RS) to be both z and m resistant, then OR = a(1-z-m+a)/(m-a)(z-a), and solving a quadratic for a:
   imputecombo <- function(OR, z, m)
   { C1 <- (OR-1); C2 <- (z+m-OR*z-OR*m-1); C3 <- OR*m*z
-    a2 = (-C2 - sqrt(C2^2 - 4*C1*C3))/(2*C1)
-    if (0 <= a2 & a2 <= 1)
-      return(c(a2, z-a2, m-a2, 1-z-m+a2)) # z and m, then z not m, then m not z, then neither
-    else (return(NA))
+  a2 = (-C2 - sqrt(C2^2 - 4*C1*C3))/(2*C1)
+  if (0 <= a2 & a2 <= 1)
+    return(c(a2, z-a2, m-a2, 1-z-m+a2)) # z and m, then z not m, then m not z, then neither
+  else (return(NA))
   }
   
-  cohort$PZA <- cohort$MOXI <- NA
-  cohort[cohort$RIF==1,c("PZA", "MOXI")] <- array(c(1,1,0,0,1,0,1,0), dim=c(4,2))[sample(1:4, size=sum(cohort$RIF==1), replace=T,
-                                                                            prob=imputecombo(OR=params["OR-PZA-if_MOXI"], z=params['PZA-R_in_RIF-R'], m=params['MOXI-R-any_in_RIF-R']))
-                                                                            ,]
-  cohort[cohort$RIF==0,c("PZA", "MOXI")] <- array(c(1,1,0,0,1,0,1,0), dim=c(4,2))[sample(1:4, size=sum(cohort$RIF==0), replace=T,
-                                                                                         prob=imputecombo(OR=params["OR-PZA-if_MOXI"], z=params['PZA-R_in_RIF-S'], m=params['MOXI-R-any_in_RIF-S']))
-                                                                                  ,]
-
-    cohort$partialmoxi[cohort$MOXI==1&cohort$RIF==1] <- sample(c(0, 1), size = sum(cohort$MOXI==1&cohort$RIF==1), replace = T, 
-                                                             prob=c(params['MOXI-R-highlevel_in_RIF-R']/params['MOXI-R-any_in_RIF-R'], 
-                                                                    1 - params['MOXI-R-highlevel_in_RIF-R']/params['MOXI-R-any_in_RIF-R']))
-  cohort$partialmoxi[cohort$MOXI==1&cohort$RIF==0] <- sample(c(0, 1), size = sum(cohort$MOXI==1&cohort$RIF==0), replace = T, 
-                                                             prob=c(params['MOXI-R-highlevel_in_RIF-S']/params['MOXI-R-any_in_RIF-S'], 
-                                                                    1 - params['MOXI-R-highlevel_in_RIF-S']/params['MOXI-R-any_in_RIF-S']))
-  cohort$partialmoxi[cohort$MOXI==0] <- 0
+  zm1 <- imputecombo(OR=params["OR-PZA-if_MOXI"], z=params['PZA-R_in_RIF-R'], m=params['MOXI-R-any_in_RIF-R'])
+  probs[types$RIF==1] <- probs[types$RIF==1]*
+    ((zm1[1]*types$PZA*types$MOXI + zm1[2]*types$PZA*(1-types$MOXI) + zm1[3]*(1-types$PZA)*types$MOXI + zm1[4]*(1-types$PZA)*(1-types$MOXI))[types$RIF==1])
+                                                                                  
+  zm2 <- imputecombo(OR=params["OR-PZA-if_MOXI"], z=params['PZA-R_in_RIF-S'], m=params['MOXI-R-any_in_RIF-S'])
+  probs[types$RIF==0] <- probs[types$RIF==0]*
+    ((zm2[1]*types$PZA*types$MOXI + zm2[2]*types$PZA*(1-types$MOXI) + zm2[3]*(1-types$PZA)*types$MOXI + zm2[4]*(1-types$PZA)*(1-types$MOXI))[types$RIF==0])
   
+  probs[types$MOXI==1&types$RIF==1] <- probs[types$MOXI==1&types$RIF==1]*ifelse(types$partialmoxi[types$MOXI==1&types$RIF==1],  1 - params['MOXI-R-highlevel_in_RIF-R']/params['MOXI-R-any_in_RIF-R'], 
+                                                                    params['MOXI-R-highlevel_in_RIF-R']/params['MOXI-R-any_in_RIF-R'])
+
+  probs[types$MOXI==1&types$RIF==0] <- probs[types$MOXI==1&types$RIF==0]*ifelse(types$partialmoxi[types$MOXI==1&types$RIF==0], 1 - params['MOXI-R-highlevel_in_RIF-S']/params['MOXI-R-any_in_RIF-S'], 
+                                                                                params['MOXI-R-highlevel_in_RIF-S']/params['MOXI-R-any_in_RIF-S'])
+  
+  probs[types$partialmoxi==1&types$MOXI==0] <- 0
   # # here, MOXI indicates any moxi resistance, and partialmoxi indicates only low-level/partial resistance (and partial activity)
-  # cohort$MOXI[cohort$RIF==1] <- sample(c(0, 1), size = sum(cohort$RIF==1), replace = T, 
-  #                                      prob=c(1-params['MOXI-R-any_in_RIF-R'], params['MOXI-R-any_in_RIF-R']))
-  # cohort$MOXI[cohort$RIF==0] <- sample(c(0, 1), size = sum(cohort$RIF==0), replace = T, 
-  #                                      prob=c(1-params['MOXI-R-any_in_RIF-S'], params['MOXI-R-any_in_RIF-S']))
-  # cohort$PZA[cohort$RIF==1& cohort$MOXI==1] <- sample(c(0, 1), size = sum(cohort$RIF==1), replace = T, 
-  #                                     prob=c(1-params['PZA-R_in_RIF-R'], params['PZA-R_in_RIF-R']))
-  # cohort$PZA[cohort$RIF==0] <- sample(c(0, 1), size = sum(cohort$RIF==0), replace = T, 
-  #                                     prob=c(1-params['PZA-R_in_RIF-S'], params['PZA-R_in_RIF-S']))
 
-  cohort$BDQ <- sample(c(0, 1), size = nrow(cohort), replace = T,
-                       prob=c(1-params['BDQ-R_in_All'], params['BDQ-R_in_All']))
-  cohort$PA <- sample(c(0, 1), size = nrow(cohort), replace = T, 
-                      prob=c(1-params['PA-R_in_All'], params['PA-R_in_All']))
+  typesandprobs <- cbind(types, probs)
+  colnames(typesandprobs) <- c(colnames(types), "Freq")
   
-  return(cohort)
+  typesandprobs <- typesandprobs[do.call(order, as.data.frame(typesandprobs[,patientvars])),] 
+  
+  typesandprobs <- rbind(typesandprobs, do.call(rbind, replicate(subset(typesandprobs, RxHist==0&NovelHist==0&RIF==0&INH==0&PZA==0&MOXI==0&partialmoxi==0), n = 9, simplify = F)))
+  typesandprobs[typesandprobs$RxHist==0&typesandprobs$NovelHist==0&typesandprobs$RIF==0&typesandprobs$INH==0&typesandprobs$PZA==0&typesandprobs$MOXI==0&typesandprobs$partialmoxi==0, "Freq"] <- 
+    typesandprobs[typesandprobs$RxHist==0&typesandprobs$NovelHist==0&typesandprobs$RIF==0&typesandprobs$INH==0&typesandprobs$PZA==0&typesandprobs$MOXI==0&typesandprobs$partialmoxi==0, "Freq"]/10
+  
+  return(typesandprobs)
 }
 
 
@@ -213,21 +304,22 @@ allDSTresults <- function(scenario, Result, patient, params, stochasticmode=TRUE
   N <- nrow(patient)
   
   FullDST <- array(NA, dim=c(N, 4)); colnames(FullDST) = c("none", "RR", "FQR", "both")
+  # make it 2 if it's high-level FQ-R, 1 otherwise (for FQR and for both, and for fqdetect)  
   
-  # probability of detecting FQR if Xpert XDR is done (for now, we won't have treatment selection depend on type of FQ resistance, but only treatment outcome):
-  fqdetect <- (patient$partialmoxi==1)*prob(params["Sens_FQ_low"], N, stochasticmode) + (patient$MOXI==1&patient$partialmoxi==0)*prob(params["Sens_FQ_high"], N, stochasticmode)
+  fqdetect <- (patient$partialmoxi==1)*prob(params["Sens_FQ_low"], N, stochasticmode) + 2*(patient$MOXI==1&patient$partialmoxi==0)*prob(params["Sens_FQ_high"], N, stochasticmode)
   
   FullDST[,4] <- Result[,2]*(intervention$xpertxdr=="simultaneous"|intervention$xpertxdr=="stepwise")*fqdetect
   
-  FullDST[,2] <- Result[,2]*( (intervention$xpertxdr=="simultaneous"|intervention$xpertxdr=="stepwise")*(1 - fqdetect) + 
+  FullDST[,2] <- Result[,2]*( (intervention$xpertxdr=="simultaneous"|intervention$xpertxdr=="stepwise")*as.numeric(fqdetect==0) + 
                                 (1-(intervention$xpertxdr=="simultaneous"|intervention$xpertxdr=="stepwise")) )
   
   FullDST[,3] <- (1-Result[,2])*(intervention$xpertxdr=="simultaneous")*fqdetect
   
-  FullDST[,1] <- 1-rowSums(FullDST[,2:4])
+  FullDST[,1] <- as.numeric(rowSums(FullDST[,2:4])==0)
   
   return(FullDST)  
 }
+
 
 Regimenselect <- function(scenario, Result, Considernovel, FullDST, patient, stochasticmode) # take DST results + scenario + patient history, and choose regimen
   ##** need to modify array handling to allow just a single patient
@@ -238,12 +330,18 @@ Regimenselect <- function(scenario, Result, Considernovel, FullDST, patient, sto
   regs <- array(0, dim=c(nrow(patient), length(regimens))); colnames(regs) <- regimens
 
   # Consider novel
-  # Detect FQ and RR
-  regs[,'bpal'] <- regs[,'bpal'] + Considernovel*FullDST[,"both"]*(1-patient$NovelHist)
-  regs[,'backup_mdr'] <- regs[,'backup_mdr'] + Considernovel*FullDST[,"both"]*patient$NovelHist
-  # Detect FQ only
-  regs[,'bpal'] <- regs[,'bpal'] + Considernovel*FullDST[,"FQR"]*(1-patient$NovelHist) 
-  regs[,'backup'] <- regs[,'backup'] + Considernovel*FullDST[,"FQR"]*(patient$NovelHist)
+  # Detect FQ (with or without RR)
+  regs[,'backup'] <- regs[,'backup'] + Considernovel*as.numeric(FullDST[,"both"]>0)
+  regs[,'backup'] <- regs[,'backup'] + Considernovel*as.numeric(FullDST[,"FQR"]>0)
+  
+  # # Detect FQ and RR
+  # regs[,'bpal'] <- regs[,'bpal'] + Considernovel*as.numeric(FullDST[,"both"]==2)*(1-patient$NovelHist)
+  # regs[,'bpammz6'] <- regs[,'bpammz6'] + Considernovel*as.numeric(FullDST[,"both"]==1)*(1-patient$NovelHist)
+  # regs[,'backup_mdr'] <- regs[,'backup_mdr'] + Considernovel*as.numeric(FullDST[,"both"]>0)*patient$NovelHist
+  # # Detect FQ only
+  # regs[,'bpal'] <- regs[,'bpal'] + Considernovel*as.numeric(FullDST[,"FQR"]==2)*(1-patient$NovelHist) 
+  # regs[,'bpammz6'] <- regs[,'bpammz6'] + Considernovel*as.numeric(FullDST[,"FQR"]==1)*(1-patient$NovelHist) 
+  # regs[,'backup'] <- regs[,'backup'] + Considernovel*as.numeric(FullDST[,"FQR"]>0)*(patient$NovelHist)
   # Detect RR only
   regs[,intervention$regimen_r] <- regs[,intervention$regimen_r] + Considernovel*FullDST[,"RR"]
   # Detect neither
@@ -289,11 +387,10 @@ make.active.regimen.matrix <- function()
   active[,"bpamz4"] <- active[,"bpamz6"] <- paste0(ifelse(active[,"BDQ"]==1, "", "B"),ifelse(active[,"PA"]==1, "", "Pa"), 
                                                    ifelse(active[,"MOXI"]==1, ifelse(active[,"partialmoxi"]==1, "m", ""), "M"), 
                                                    ifelse(active[,"PZA"]==1, "", "Z") )
-  active[,"bpal"] <- paste0(ifelse(active[,"BDQ"]==1, "", "B"),ifelse(active[,"PA"]==1, "", "Pa"), "L")
-  active[,"backup"] <- active[,"hrze"]
-  active[,"backup_mdr"] <- active[,"mdr"]
-  
-  
+  active[,"backup"] <- paste0(ifelse(active[,"BDQ"]==1, "", "B"), ifelse(active[,"PA"]==1, "", "Pa"), 
+                              "M", 
+                              ifelse(active[,"PZA"]==1, "", "Z") )
+
   active["resistance"] <- data.matrix(active[,1:length(drugs)])%*%10^((length(drugs)-1):0)
   return(active)
 }
@@ -311,30 +408,34 @@ activeregimen <- function(matrix, patient, Regimen)
   return(matrix[cbind(rows, cols)])
 }
 
-
-make.recurrence.matrix <- function()
+make.recurrence.matrix <- function(params, bpamzhigh = FALSE)
 {
-  # Model treatment outcomes (probablities of cure, failure, relapse, and acquired resistance, for a given phenotype and a given months completed)
+  # this just gives the fraction p that recur, of those (1-f, where f is failures) who are completing the specified amount of therapy without failure.
+  # assume there are also f who fail, and that f = failures_per_relapse*(p*(1-f)) => f = p*(failures_pre_repalse)/(1 + p*failures_per_relapse)
+  # for a total of f + p*(1-f) = f + f/failures_per_Relapse = p*(reailures_per_relapse + 1)/(1 + p*failures_per_relapse) --> gets used later in ADR, and total adr will get divided the same way. 
+  # when our data combine failures and relapses, we estimate just the relapse fraction here
   recurrencematrix <- array(NA, dim=c(length(activeregimens),length(monthsmodeled))); dimnames(recurrencematrix) <- list(activeregimens,monthsmodeled)
 
-    recurrencematrix["HR(ZE)",] <- wallis(cxconv = reversewallis(params["HRZE_pooled_relapse"]/(params["INH_multiplier"]*params["pooled_INH_fraction"] + (1-params["pooled_INH_fraction"])),6, params=params), months = monthsmodeled, params=params)
+  recurrencematrix["HR(ZE)",] <- wallis(cxconv = reversewallis(params["HRZE_pooled_relapse"]/(params["INH_multiplier"]*params["pooled_INH_fraction"] + (1-params["pooled_INH_fraction"])),6, params=params), months = monthsmodeled, params=params)
   # HR(ZE)_relapse * (INH_multiplier*pooled_INH_fraction + (1-pooled_INH_fraction)) = HRZE_pooled_relapse
   recurrencematrix["R(ZE)",] <- params["INH_multiplier"]*recurrencematrix["HR(ZE)",] 
-  recurrencematrix["BPaMZ",] <- wallis(reversewallis(params["HRZE_pooled_relapse"],4,params=params), monthsmodeled, params=params)
+  if(bpamzhigh) recurrencematrix["BPaMZ",] <- wallis(reversewallis(params["HRZE_pooled_relapse"],5,params=params), monthsmodeled, params=params) else
+    recurrencematrix["BPaMZ",] <- wallis(reversewallis(params["HRZE_pooled_relapse"],4,params=params), monthsmodeled, params=params)
   recurrencematrix["BPaM",] <- wallis(params["BPaM_cxconv"], monthsmodeled,params=params)
   recurrencematrix["BPaZ",] <- wallis(params["BPaZ_cxconv"], monthsmodeled,params=params)
   recurrencematrix["BMZ",] <- recurrencematrix["PaMZ",] <- recurrencematrix["BPaZ",]
   recurrencematrix["MDR, FQ-S",] <- wallis(reversewallis(params["MDR_failrelapse_FQ-S"]*1/(1+params["Failures_per_recurrence"]),6,params=params), months = monthsmodeled/3, params = params)
   recurrencematrix["MDR, FQ-R",] <- wallis(reversewallis(params["MDR_failrelapse_FQ-R"]*1/(1+params["Failures_per_recurrence"]),6,params=params), months = monthsmodeled/3, params = params)
-  recurrencematrix["H(ZE)",] <- wallis(reversewallis(params["INHmono_failrelapse"]*1/(1+params["Failures_per_recurrence"]),6,params=params), months = monthsmodeled/1.5, params = params)
+  recurrencematrix["H(ZE)",] <- wallis(reversewallis(params["INHmono_relapse"],6,params=params), months = monthsmodeled/1.5, params = params)
   recurrencematrix["BPa",] <- recurrencematrix["BZ",] <- recurrencematrix["PaZ",] <- recurrencematrix["BM",] <- recurrencematrix["PaM",] <- recurrencematrix["MZ",] <- recurrencematrix["R(ZE)",] 
   
   recurrencematrix["(ZE)",] <- recurrencematrix["B",] <- recurrencematrix["Pa",] <- recurrencematrix["M",] <- recurrencematrix["Z",] <- 
     c(wallis(cxconv = reversewallis(recurrence = params["Highrecurrence"],months = 6,params = params),months = monthsmodeled,params = params)[1:6], rep(params["Highrecurrence"], length(monthsmodeled)-6))
   
-  recurrencematrix["BPaL",] <- recurrencematrix["HR(ZE)",]
-  recurrencematrix["BL",] <- recurrencematrix["PaL",] <- recurrencematrix["BPa",]
-  recurrencematrix["m",] <- recurrencematrix["L",] <- recurrencematrix["none",] <- recurrencematrix["B",]
+  # recurrencematrix["BPaL",] <- recurrencematrix["HR(ZE)",]
+  # recurrencematrix["BL",] <- recurrencematrix["PaL",] <- recurrencematrix["BPa",]
+  recurrencematrix["m",] <- recurrencematrix["none",] <- recurrencematrix["B",]
+  # recurrencematrix["L",] <- recurrencematrix["B",]
   
   recurrencematrix[recurrencematrix>1] <- 1
   
@@ -346,34 +447,36 @@ make.recurrence.matrix <- function()
   recurrencematrix["Bm",] <- increaseodds(recurrencematrix["B",], params["partialmoxiOR"])
   recurrencematrix["Pam",] <- increaseodds(recurrencematrix["Pa",], params["partialmoxiOR"])
   recurrencematrix["mZ",] <- increaseodds(recurrencematrix["Z",], params["partialmoxiOR"])
-  
-  recurrencematrix[recurrencematrix>params["Highrecurrence"]] <- params["Highrecurrence"]
+
+    recurrencematrix[recurrencematrix>params["Highrecurrence"]] <- params["Highrecurrence"]
   
   return(recurrencematrix)
 } 
 
-make.adr.matrix <- function()
+make.adr.matrix <- function(params)
 {
-  adrmatrix <- array(NA, dim=c(length(activeregimens), 5)); dimnames(adrmatrix) <- list(activeregimens, c("HR", "RR", "FQR", "BR", "PaR"))
-  adrmatrix[,"RR"] <- c(params["adr_r"]*c(1, params["adrfactor_other"]), rep(0, length(activeregimens)-2))
-  adrmatrix["MDR, FQ-S","FQR"] <- adrmatrix["MDR, FQ-low","FQR"] <- params["adr_mdr"]
-  adrmatrix["BPaMZ","FQR"] <- adrmatrix["BPamZ","FQR"] <- params["adr_bpamz"]
-  adrmatrix["BPaM","FQR"] <- adrmatrix["BPam","FQR"] <- params["adr_bpamz"]*params["adrfactor_z"]
-  adrmatrix["BMZ","FQR"] <- adrmatrix["PaMZ","FQR"] <- adrmatrix["BmZ","FQR"] <- adrmatrix["PamZ","FQR"] <- params["adr_bpamz"]*params["adrfactor_other"]
-  adrmatrix["BM","FQR"] <- adrmatrix["PaM","FQR"] <- adrmatrix["Bm","FQR"] <- adrmatrix["Pam","FQR"] <- params["adr_bpamz"]*params["adrfactor_other"]*params["adrfactor_z"]
-  adrmatrix["MZ","FQR"] <- adrmatrix["mZ","FQR"] <- params["adr_bpamz"]*params["adrfactor_twodrugs"]
-  adrmatrix["M","FQR"] <- adrmatrix["m","FQR"] <- params["Highrecurrence"]*(1+params[ "Failures_per_recurrence"])/(1+params["Highrecurrence"]*params[ "Failures_per_recurrence"])
-  adrmatrix[c("BPaMZ", "BPaM", "BPaZ", "BMZ", "BPa", "BZ", "BM", "BPaL", "BL"),"BR"] <- 
+  adrmatrix <- array(NA, dim=c(length(activeregimens), 5)); dimnames(adrmatrix) <- list(activeregimens, paste0(adrs,"-R")) 
+  adrmatrix[,"RIF-R"] <- c(params["adr_r"]*c(1, params["adrfactor_other"]), rep(0, length(activeregimens)-2))
+  adrmatrix["MDR, FQ-S","MOXI-R"] <- adrmatrix["MDR, FQ-low","MOXI-R"] <- params["adr_mdr"]
+  adrmatrix["BPaMZ","MOXI-R"] <- adrmatrix["BPamZ","MOXI-R"] <- params["adr_bpamz"]
+  adrmatrix["BPaM","MOXI-R"] <- adrmatrix["BPam","MOXI-R"] <- params["adr_bpamz"]*params["adrfactor_z"]
+  adrmatrix["BMZ","MOXI-R"] <- adrmatrix["PaMZ","MOXI-R"] <- adrmatrix["BmZ","MOXI-R"] <- adrmatrix["PamZ","MOXI-R"] <- params["adr_bpamz"]*params["adrfactor_other"]
+  adrmatrix["BM","MOXI-R"] <- adrmatrix["PaM","MOXI-R"] <- adrmatrix["Bm","MOXI-R"] <- adrmatrix["Pam","MOXI-R"] <- params["adr_bpamz"]*params["adrfactor_other"]*params["adrfactor_z"]
+  adrmatrix["MZ","MOXI-R"] <- adrmatrix["mZ","MOXI-R"] <- params["adr_bpamz"]*params["adrfactor_twodrugs"]
+  adrmatrix["M","MOXI-R"] <- adrmatrix["m","MOXI-R"] <- params["Highrecurrence"]*(1+params[ "Failures_per_recurrence"])/(1+params["Highrecurrence"]*params[ "Failures_per_recurrence"])
+  adrmatrix[c("BPaMZ", "BPaM", "BPaZ", "BMZ", "BPa", "BZ", "BM"),"BDQ-R"] <- 
     params["adr_bpamz"]*c(1, params["adrfactor_z"], params["adrfactor_other"], params["adrfactor_other"], params["adrfactor_other"]*params["adrfactor_z"], 
-                          params["adrfactor_twodrugs"], params["adrfactor_other"]*params["adrfactor_z"], 1, params["adrfactor_other"])
-  adrmatrix[c("BPaMZ", "BPaM", "BPaZ", "PaMZ", "BPa", "PaZ", "PaM", "BPaL", "PaL"),"PaR"] <- 
+                          params["adrfactor_twodrugs"], params["adrfactor_other"]*params["adrfactor_z"])
+  adrmatrix[c("BPaMZ", "BPaM", "BPaZ", "PaMZ", "BPa", "PaZ", "PaM"),"PA-R"] <- 
     params["adr_bpamz"]*c(1, params["adrfactor_z"], params["adrfactor_other"], params["adrfactor_other"], params["adrfactor_other"]*params["adrfactor_z"], 
-                          params["adrfactor_twodrugs"], params["adrfactor_other"]*params["adrfactor_z"], 1, params["adrfactor_other"])
-  adrmatrix["H(ZE)","HR"] <- adrmatrix["B", "BR"] <- adrmatrix["Pa", "PaR"] <- params["Highrecurrence"]*(1+params[ "Failures_per_recurrence"])/(1+params["Highrecurrence"]*params[ "Failures_per_recurrence"])
-  adrmatrix[c("BPamZ", "BPam", "BmZ", "Bm"),"BR"] <- 
-    params["adrfactor_partialmoxi"]*adrmatrix[c("BPaZ", "BPa", "BZ", "B"),"BR"] 
-  adrmatrix[c("BPamZ", "BPam", "PamZ", "Pam"),"PaR"] <- 
-    params["adrfactor_partialmoxi"]*adrmatrix[c("BPaZ", "BPa", "PaZ", "Pa"),"PaR"] 
+                          params["adrfactor_twodrugs"], params["adrfactor_other"]*params["adrfactor_z"])
+  adrmatrix["HR(ZE)","INH-R"] <- params["adr_r"] # added assumption
+  adrmatrix["H(ZE)","INH-R"] <- params["adr_r"]*params["adrfactor_twodrugs"] # this shouldn't spell universal failure?
+  adrmatrix["B", "BDQ-R"] <- adrmatrix["Pa", "PA-R"] <- params["Highrecurrence"]*(1+params[ "Failures_per_recurrence"])/(1+params["Highrecurrence"]*params[ "Failures_per_recurrence"])
+  adrmatrix[c("BPamZ", "BPam", "BmZ", "Bm"),"BDQ-R"] <- 
+    params["adrfactor_partialmoxi"]*adrmatrix[c("BPaZ", "BPa", "BZ", "B"),"BDQ-R"] 
+  adrmatrix[c("BPamZ", "BPam", "PamZ", "Pam"),"PA-R"] <- 
+    params["adrfactor_partialmoxi"]*adrmatrix[c("BPaZ", "BPa", "PaZ", "Pa"),"PA-R"] 
 
   return(adrmatrix)
 }
@@ -389,7 +492,7 @@ diagnosisevent <- function(last, params, N, eventtypes, statetypes, regimentypes
   current <- last
   
   # ** could later change the diagnosis time distribution (and same for mortallity etc?) to something less skewed
-  needdiagnosis <- ((last[,"TBstate"]==statetypes$undiagnosed)|(last[,"TBstate"]==statetypes$failed)| (last[,"TBstate"]==statetypes$relapsed))
+  needdiagnosis <- ((last[,"TBstate"]==statetypes$undiagnosed)|(last[,"TBstate"]==statetypes$failed)| (last[,"TBstate"]==statetypes$relapsed)| (last[,"TBstate"]==statetypes$pretreatmentlost))
   dxtime <- rexp(N, 1/(last[,"RxHist"]*params["Tbdxtime_recurrence"] + (1-last[,"RxHist"])*params["Tbdxtime"]))
   
   # check for mortality before initial TB diagnosis event:
@@ -418,6 +521,7 @@ treatmentinitiationattempt <- function(last, params, N, eventtypes, statetypes, 
   currentcohort <- data.frame(current[, c("RxHist", "NovelHist", "HIV","SmearStatus","RIF", "INH", "PZA", "MOXI","partialmoxi", "BDQ", "PA")])
   
   # perform any DST and select a regimen
+  # document DSTs performed. Add 1 if xpert done, and 0.1 if xdr done (i.e. Xpert&ifelse(intervention$xpertxdr=="simultaneous",1,Result[2]))
   Considernovel <- Novelavailable(currentcohort, params, stochasticmode)
   Xpert <- Xpertdone(scenario, currentcohort, params, stochasticmode) # is xpert done? depends on scenario and patient
   Result <- Xpertresult(Xpert, currentcohort, params, stochasticmode) # Xpert MTB/RIF result. Dependent on Xpertdone (And therefore indirectly on scenario)
@@ -425,7 +529,9 @@ treatmentinitiationattempt <- function(last, params, N, eventtypes, statetypes, 
   Regimen <- Regimenselect(scenario, Result, Considernovel, FullDST, currentcohort, stochasticmode) # regimen selected for each patient, depending on the DST results, the novel availability, the patient's prior novel regimen exposure, and the scenario's preferred regimens
   
   if(!stochasticmode) stop("Can't use the matrix regimen output in the lines that follow, still need to code this version")
-  
+
+  current[,"DSTs"] <- last[,"DSTs"] + Xpert + 0.1*Xpert*(as.numeric(intervention$xpertxdr=="simultaneous") + Result[,2]*as.numeric(intervention$xpertxdr=="stepwise"))
+    
   # event will now be treatment start, but we'll wait to add that only for those who start treatment
   # determine time of this event
   # DST, and selection of a nonstandard regimen, may incur delays or pretreatment losses to follow up
@@ -444,9 +550,9 @@ treatmentinitiationattempt <- function(last, params, N, eventtypes, statetypes, 
   
   lost <- needtreatment&(!deaths)&(prob(params["Unavoidableloss"] + Xpert*params["DSTloss"] + (Regimen!=intervention$regimen_s)*params["Regimenloss"], N, stochasticmode))
   current[lost,"eventtype"] <- eventtypes$pretreatmentltfu
-  current[lost,"TBstate"] <- statetypes$undiagnosed
+  current[lost,"TBstate"] <- statetypes$pretreatmentlost
   
-  current[needtreatment&(!deaths), "eventtime"] <- last[needtreatment&(!deaths), "eventtime"] + starttime[needtreatment&(!deaths)];
+  current[needtreatment&(!deaths), "eventtime"] <- last[needtreatment&(!deaths), "eventtime"] + starttime[needtreatment&(!deaths)]; #assumes pretreatment losses happen at starttime
   
   treated <- needtreatment&(!deaths)&(!lost)
   current[treated,"eventtype"] <- eventtypes$treatmentstart
@@ -457,13 +563,13 @@ treatmentinitiationattempt <- function(last, params, N, eventtypes, statetypes, 
   active <- activeregimen(make.active.regimen.matrix(), currentcohort, Regimen)
   active[active==""] <- "none"
   ## for each patient, sample risks of ADR based on active regimen, and if any occur, change phenotype in cohort and set state as _adr
-  adrrisks <- make.adr.matrix()[active,]
-  adr <- array(rbinom(N*4, 1, adrrisks[]), dim=c(N,4)); adr[is.na(adr)] <- 0
+  adrrisks <- make.adr.matrix(params)[active,]
+  adr <- array(rbinom(N*length(adrs), 1, adrrisks[]), dim=c(N,length(adrs))); adr[is.na(adr)] <- 0 # this samples resistance risk for each drug
   # update state accordingly (haven't removed deaths yet)
   current[treated, "TBstate"] <- ((rowSums(adr)>=1)*statetypes$treating_adr + (rowSums(adr)<1)*statetypes$treating)[treated]
   # update resistance accordingly, if ADR: change 0s (for both FQ columns) in current to 1 if adr is 1 (and !lost) 
-  current[treated, c("RIF", "MOXI", "BDQ", "PA")] <- pmax(last[treated, c("RIF", "MOXI", "BDQ", "PA")], adr[treated,])
-  # if moxi adr but already were moxi, then partialmoxi needs to change to zero
+  current[treated, adrs] <- pmax(last[treated, adrs], adr[treated,])
+  # if moxi adr but already were moxi, then partialmoxi now needs to change to zero
   # (but first make sure we're allowing moxi adr for baseline partialmoxi -- yes, because the "m"s have a risk of FQ-R ADR in adrmatrix.)
   current[(treated&(adr[,2]==1)&(last[,"partialmoxi"]==1)), "partialmoxi"] <- 0
   
@@ -480,7 +586,7 @@ treatmentinitiationattempt <- function(last, params, N, eventtypes, statetypes, 
 ## treatment end (due to end of regimen or loss to follow up)
 ## will carry forward those who aren't dead or getting treated
 
-treatmentend <- function(last, params, N, eventtypes, statetypes, regimentypes)
+treatmentend <- function(last, params, N, eventtypes, statetypes, regimentypes, bpamzhigh=FALSE)
 {
   current <- last
   
@@ -505,7 +611,7 @@ treatmentend <- function(last, params, N, eventtypes, statetypes, regimentypes)
   current[failrelapseadr, "eventtype"] <- eventtypes$treatmentend
   current[failrelapseadr,"TBstate"] <- fail_if_adr[failrelapseadr]*statetypes$failed + ((!fail_if_adr)[failrelapseadr]*statetypes$pendingrelapse)
   current[failrelapseadr,"RxHist"] <- 1
-  current[failrelapseadr & (last[,"Currentregimen"] %in% which(regimens %in% c("bpamz4", "bpamz6", "bpal"))), "NovelHist"] <- 1
+  current[failrelapseadr & (last[,"Currentregimen"] %in% which(regimens %in% c("bpamz4", "bpamz6"))), "NovelHist"] <- 1
   current[failrelapseadr,"Currentregimen"] <- 0
   current[failrelapseadr,"SmearStatus"] <- prob(current[failrelapseadr,"HIV"]*params['Smearpos_in_HIVpos'] + 
                                                   (1-current[failrelapseadr,"HIV"])*params['Smearpos_in_HIVneg'],
@@ -518,14 +624,14 @@ treatmentend <- function(last, params, N, eventtypes, statetypes, regimentypes)
   current[needoutcome, "eventtype"] <- eventtypes$treatmentend
   # decide failure or relapser TBstate:
   ## adjust remaining risk of relapse/failure based on overall risk of adr
-  adrrisks <- make.adr.matrix()
+  adrrisks <- make.adr.matrix(params)
   adrrisks[is.na(adrrisks)] <- 0
-  totaladrrisks <- adrrisks[,1] + (1-adrrisks[,1])*(adrrisks[,2] + (1-adrrisks[,2])*(adrrisks[,3] + (1-adrrisks[,3])*adrrisks[,4]))
+  totaladrrisks <- adrrisks[,1] + (1-adrrisks[,1])*(adrrisks[,2] + (1-adrrisks[,2])*(adrrisks[,3] + (1-adrrisks[,3])*(adrrisks[,4] + (1-adrrisks[,4])*adrrisks[,5])))
   # if recurrences are R of those at risk, and failures are p*R (p=failures_per_Rec), 
   # then overall failures or recurrences will be f + (1-f)*R = (p+1)*(1-f)*R --> f=pR/(1+pR) -->f+(1-f)R=R(1+p)/(1+pR)
   # so then really, the cap on poor outcomes is a little over highrecurrence, at 83% rather than 80, but I think that's okay.
   # and it will be higher still when ADR=1, so I'll reduce the max ADR to highrecurrence (p(1+R)/(1+pR) to allow for self-cure there as well. 
-  failures_or_relapses_remaining <- apply(make.recurrence.matrix()*(1+params["Failures_per_recurrence"])/(1+make.recurrence.matrix()*params["Failures_per_recurrence"]), 2, "-", totaladrrisks)
+  failures_or_relapses_remaining <- apply(make.recurrence.matrix(params, bpamzhigh)*(1+params["Failures_per_recurrence"])/(1+make.recurrence.matrix(params, bpamzhigh)*params["Failures_per_recurrence"]), 2, "-", totaladrrisks)
   failures_or_relapses_remaining[failures_or_relapses_remaining<0] <- 0
   ## assign relapse/failure based on (rounded) time completed:
   Rxtime <- pmin(endtime, monthsmodeled[unlist(lapply(floor(ltfutime), function(x) which.min(abs(monthsmodeled-x))))])
@@ -539,7 +645,7 @@ treatmentend <- function(last, params, N, eventtypes, statetypes, regimentypes)
   current[needoutcome, "TBstate"][relapses==1] <- statetypes$pendingrelapse
   current[needoutcome, "TBstate"][(!cures)&(!relapses)] <- statetypes$failed
   current[needoutcome,"RxHist"] <- 1
-  current[needoutcome & (last[,"Currentregimen"] %in% which(regimens %in% c("bpamz4", "bpamz6", "bpal"))), "NovelHist"] <- 1
+  current[needoutcome & (last[,"Currentregimen"] %in% which(regimens %in% c("bpamz4", "bpamz6"))), "NovelHist"] <- 1
   current[needoutcome,"Currentregimen"] <- 0
   
   current[!onRx,"eventtype"] <- eventtypes$carryforward
@@ -617,7 +723,7 @@ require(abind)
 require(rlist)
 require(prodlim)
 
-modelcourse <- function(scenario="0", cohort, params, reps=1, steplimit=16, stochasticmode=TRUE) # will need to repeat same for each rep of a given patient, if probabilistic events
+modelcourse <- function(scenario="0", cohort, params, reps=1, steplimit=16, stochasticmode=TRUE, bpamzhigh=FALSE) # will need to repeat same for each rep of a given patient, if probabilistic events
 {
   repcohort <- do.call(rbind, replicate(reps, cohort, simplify=FALSE))
   intervention <- set.scenario(scenario)
@@ -637,13 +743,13 @@ modelcourse <- function(scenario="0", cohort, params, reps=1, steplimit=16, stoc
   # (act on current event, save current to course when move to next event)
   course <- abind(course, diagnosisevent(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
   course <- abind(course, treatmentinitiationattempt(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes, scenario), along=3)
-  course <- abind(course, treatmentend(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
+  course <- abind(course, treatmentend(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes, bpamzhigh), along=3)
   course <- abind(course, relapseevent(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
 
   ## and back to event 5= DIAGNOSIS AGAIN ## 
   course <- abind(course, diagnosisevent(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
   course <- abind(course, treatmentinitiationattempt(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes, scenario), along=3)
-  course <- abind(course, treatmentend(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
+  course <- abind(course, treatmentend(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes, bpamzhigh), along=3)
   course <- abind(course, relapseevent(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
   
   #continue to loop up to sooner of steplimit/4 loops or no more (uncured or dead) or those still alive and uncured have run for 20 years:
@@ -653,7 +759,7 @@ modelcourse <- function(scenario="0", cohort, params, reps=1, steplimit=16, stoc
   {
     course <- abind(course, diagnosisevent(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
     course <- abind(course, treatmentinitiationattempt(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes, scenario), along=3)
-    course <- abind(course, treatmentend(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
+    course <- abind(course, treatmentend(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes, bpamzhigh), along=3)
     course <- abind(course, relapseevent(course[,,dim(course)[[3]]], params, N, eventtypes, statetypes, regimentypes), along=3)
   }
     
@@ -676,8 +782,8 @@ stochasticmode <- T
 
 
 
-## ** sensitivity analysis to add: correlate outcomes with Xpert status (Xpert negative shortens required treatment, Xpert positive extends it), \\\
 # made patients Sm+ or Sm- (which will depend on HIV status), and will differentiate Xpert sensitivity (but not DST result yield once Xpert is positive) and, later, infectiousness, based on smear. Status will be reassigned at time of failure/relapse. 
+## ** sensitivity analysis to consider: correlate outcomes with Xpert status (Xpert negative shortens required treatment, Xpert positive extends it), \\\
 
 ## could consider correlation of resistance with other factors that promote relapse (but dont have data beyond what's already be captured in the data on resistance outcomes?)
 
@@ -702,3 +808,4 @@ stochasticmode <- T
 # ADR (acquired drug resistance) is a fraction of all treatments, so it will happen at the start of treatment,
 # Those who ADR  will be destined to fail or relapse (divided into same ratio, and with same temporal dynamics after treatment ends) no matter how much treatment they get.
 # When TB diagnosis occurs, any DST and regimen selection are modeled immediately, but treatment start may not be immediate
+
